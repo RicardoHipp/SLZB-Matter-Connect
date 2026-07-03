@@ -4,12 +4,14 @@ import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.widget.Toolbar
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -22,6 +24,7 @@ import chip.devicecontroller.model.InvokeElement
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import androidx.appcompat.widget.SwitchCompat
+import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.textfield.TextInputEditText
 import com.google.chip.chiptool.util.DeviceIdUtil
@@ -39,18 +42,12 @@ class IoBrokerCompanionFragment : Fragment() {
     private val deviceController: ChipDeviceController
         get() = ChipClient.getDeviceController(requireContext())
 
-    private lateinit var stickIpEd: TextInputEditText
-    private lateinit var stickPortEd: TextInputEditText
-    private lateinit var fetchCredentialsBtn: MaterialButton
+    private lateinit var toolbar: Toolbar
     private lateinit var threadInfoCard: MaterialCardView
     private lateinit var threadNameTv: TextView
     private lateinit var threadChannelTv: TextView
     private lateinit var threadKeyTv: TextView
     private lateinit var startCommissioningBtn: MaterialButton
-
-    private lateinit var iobrokerIpEd: TextInputEditText
-    private lateinit var iobrokerPortEd: TextInputEditText
-    private lateinit var testIobrokerBtn: MaterialButton
 
     private lateinit var tabPairingLayout: View
     private lateinit var tabDevicesLayout: RecyclerView
@@ -71,18 +68,12 @@ class IoBrokerCompanionFragment : Fragment() {
     ): View? {
         val view = inflater.inflate(R.layout.fragment_iobroker_companion, container, false)
 
-        stickIpEd = view.findViewById(R.id.stickIpEd)
-        stickPortEd = view.findViewById(R.id.stickPortEd)
-        fetchCredentialsBtn = view.findViewById(R.id.fetchCredentialsBtn)
+        toolbar = view.findViewById(R.id.toolbar)
         threadInfoCard = view.findViewById(R.id.threadInfoCard)
         threadNameTv = view.findViewById(R.id.threadNameTv)
         threadChannelTv = view.findViewById(R.id.threadChannelTv)
         threadKeyTv = view.findViewById(R.id.threadKeyTv)
         startCommissioningBtn = view.findViewById(R.id.startCommissioningBtn)
-
-        iobrokerIpEd = view.findViewById(R.id.iobrokerIpEd)
-        iobrokerPortEd = view.findViewById(R.id.iobrokerPortEd)
-        testIobrokerBtn = view.findViewById(R.id.testIobrokerBtn)
 
         tabPairingLayout = view.findViewById(R.id.tabPairingLayout)
         tabDevicesLayout = view.findViewById(R.id.tabDevicesLayout)
@@ -98,21 +89,82 @@ class IoBrokerCompanionFragment : Fragment() {
         )
         tabDevicesLayout.adapter = deviceAdapter
 
+        // Settings-Zahnrad in der Toolbar
+        toolbar.inflateMenu(R.menu.iobroker_menu)
+        toolbar.setOnMenuItemClickListener { item: MenuItem ->
+            if (item.itemId == R.id.action_settings) {
+                showSettingsDialog()
+                true
+            } else {
+                false
+            }
+        }
+
         // Load cached IP
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val savedIp = prefs.getString("stick_ip", "192.168.179.148")
-        stickIpEd.setText(savedIp)
         val savedStickPort = prefs.getString("stick_port", "8080")
-        stickPortEd.setText(savedStickPort)
-
         val savedIobrokerIp = prefs.getString("iobroker_ip", "")
-        val savedIobrokerPort = prefs.getString("iobroker_port", "8087")
-        iobrokerIpEd.setText(savedIobrokerIp)
-        iobrokerPortEd.setText(savedIobrokerPort)
 
-        // Setup Button Listeners
-        fetchCredentialsBtn.setOnClickListener { fetchThreadCredentials() }
         startCommissioningBtn.setOnClickListener { startScanning() }
+
+        // Hinweis beim ersten Start bzw. solange ioBroker nicht eingerichtet ist
+        if (savedIobrokerIp.isNullOrBlank()) {
+            Snackbar.make(view, "Bitte zuerst Stick- und ioBroker-Verbindung einrichten", Snackbar.LENGTH_INDEFINITE)
+                .setAction("Einstellungen") { showSettingsDialog() }
+                .show()
+        }
+
+        // Setup Tabs
+        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab?) {
+                if (tab?.position == 0) {
+                    tabPairingLayout.visibility = View.VISIBLE
+                    tabDevicesLayout.visibility = View.GONE
+                } else {
+                    tabPairingLayout.visibility = View.GONE
+                    tabDevicesLayout.visibility = View.VISIBLE
+                    refreshDeviceList()
+                }
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab?) {}
+            override fun onTabReselected(tab: TabLayout.Tab?) {}
+        })
+
+        // Auto-fetch if IP is loaded
+        if (!savedIp.isNullOrBlank()) {
+            fetchThreadCredentials(savedIp, savedStickPort ?: "8080")
+        }
+
+        return view
+    }
+
+    private fun showSettingsDialog() {
+        val dialogView = LayoutInflater.from(requireContext())
+            .inflate(R.layout.dialog_iobroker_settings, null)
+
+        val stickIpEd: TextInputEditText = dialogView.findViewById(R.id.stickIpEd)
+        val stickPortEd: TextInputEditText = dialogView.findViewById(R.id.stickPortEd)
+        val fetchCredentialsBtn: MaterialButton = dialogView.findViewById(R.id.fetchCredentialsBtn)
+        val iobrokerIpEd: TextInputEditText = dialogView.findViewById(R.id.iobrokerIpEd)
+        val iobrokerPortEd: TextInputEditText = dialogView.findViewById(R.id.iobrokerPortEd)
+        val testIobrokerBtn: MaterialButton = dialogView.findViewById(R.id.testIobrokerBtn)
+
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        stickIpEd.setText(prefs.getString("stick_ip", "192.168.179.148"))
+        stickPortEd.setText(prefs.getString("stick_port", "8080"))
+        iobrokerIpEd.setText(prefs.getString("iobroker_ip", ""))
+        iobrokerPortEd.setText(prefs.getString("iobroker_port", "8087"))
+
+        fetchCredentialsBtn.setOnClickListener {
+            val ip = stickIpEd.text.toString().trim()
+            val port = stickPortEd.text.toString().trim()
+            if (ip.isBlank() || port.isBlank()) {
+                Toast.makeText(requireContext(), "Bitte IP-Adresse und Port eingeben", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            fetchThreadCredentials(ip, port)
+        }
 
         testIobrokerBtn.setOnClickListener {
             val ip = iobrokerIpEd.text.toString().trim()
@@ -143,38 +195,14 @@ class IoBrokerCompanionFragment : Fragment() {
             }
         }
 
-        // Setup Tabs
-        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab?) {
-                if (tab?.position == 0) {
-                    tabPairingLayout.visibility = View.VISIBLE
-                    tabDevicesLayout.visibility = View.GONE
-                } else {
-                    tabPairingLayout.visibility = View.GONE
-                    tabDevicesLayout.visibility = View.VISIBLE
-                    refreshDeviceList()
-                }
-            }
-            override fun onTabUnselected(tab: TabLayout.Tab?) {}
-            override fun onTabReselected(tab: TabLayout.Tab?) {}
-        })
-
-        // Auto-fetch if IP is loaded
-        if (!savedIp.isNullOrBlank()) {
-            fetchThreadCredentials()
-        }
-
-        return view
+        AlertDialog.Builder(requireContext())
+            .setTitle("Verbindungseinstellungen")
+            .setView(dialogView)
+            .setPositiveButton("Fertig", null)
+            .show()
     }
 
-    private fun fetchThreadCredentials() {
-        val ip = stickIpEd.text.toString().trim()
-        val port = stickPortEd.text.toString().trim()
-        if (ip.isBlank() || port.isBlank()) {
-            Toast.makeText(requireContext(), "Bitte IP-Adresse und Port eingeben", Toast.LENGTH_SHORT).show()
-            return
-        }
-
+    private fun fetchThreadCredentials(ip: String, port: String) {
         // Cache IP + Port
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         prefs.edit().putString("stick_ip", ip).putString("stick_port", port).apply()
@@ -239,7 +267,9 @@ class IoBrokerCompanionFragment : Fragment() {
 
     private fun startScanning() {
         if (fetchedChannel == null) {
-            Toast.makeText(requireContext(), "Bitte zuerst Stick-Daten abrufen!", Toast.LENGTH_SHORT).show()
+            Snackbar.make(requireView(), "Bitte zuerst Stick-Daten in den Einstellungen abrufen!", Snackbar.LENGTH_LONG)
+                .setAction("Einstellungen") { showSettingsDialog() }
+                .show()
             return
         }
         val activity = requireActivity() as CHIPToolActivity
@@ -302,10 +332,15 @@ class IoBrokerCompanionFragment : Fragment() {
     }
 
     private fun shareDevice(nodeId: Long) {
-        val iobrokerIp = iobrokerIpEd.text.toString().trim()
-        val iobrokerPort = iobrokerPortEd.text.toString().trim()
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("iobroker_ip", iobrokerIp).putString("iobroker_port", iobrokerPort).apply()
+        val iobrokerIp = prefs.getString("iobroker_ip", "") ?: ""
+        val iobrokerPort = prefs.getString("iobroker_port", "8087") ?: "8087"
+
+        if (iobrokerIp.isBlank()) {
+            Snackbar.make(requireView(), "ioBroker ist noch nicht eingerichtet", Snackbar.LENGTH_LONG)
+                .setAction("Einstellungen") { showSettingsDialog() }
+                .show()
+        }
 
         viewLifecycleOwner.lifecycleScope.launch {
             try {
