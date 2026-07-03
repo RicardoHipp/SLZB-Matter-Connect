@@ -13,6 +13,24 @@ Wer die App nur nutzen will (kein eigener Build nötig): fertige APKs liegen unt
 [Releases](../../releases). Einfach herunterladen und per `adb install` oder direkt
 auf dem Handy installieren.
 
+## ioBroker vorbereiten
+
+Damit die App mit deinem ioBroker sprechen kann, sind zwei einmalige Schritte
+**in ioBroker selbst** nötig (unabhängig davon, ob du die fertige APK nutzt
+oder selbst baust):
+
+1. **Adapter "Einfache RESTful API" (simple-api) installieren.**
+   In ioBroker unter "Adapter" nach `simple-api` suchen, installieren, eine
+   Instanz anlegen und auf **Port 8087** einstellen (Standardwert, den die App
+   vorschlägt). Darüber laufen sowohl der "Verbindung testen"-Button in der
+   App als auch das automatische Übermitteln des Koppelungscodes.
+
+2. **Skript `iobroker/matter_pairing_code.js` anlegen.**
+   Inhalt dieser Datei als neues Skript in einer Instanz des JavaScript-Adapters
+   (`javascript.0`) in ioBroker anlegen und starten. Es nimmt den von der App
+   übermittelten Koppelungscode entgegen und stößt die eigentliche Koppelung
+   im Matter-Adapter (`matter.0`) an.
+
 ## Selbst entwickeln / bauen
 
 Dieses Repo enthält **nicht** das komplette Matter-SDK (mehrere GB), sondern nur:
