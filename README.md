@@ -5,8 +5,6 @@ Android-Begleit-App für ioBroker, basierend auf Googles offiziellem Matter-Refe
 Koppelt Matter-over-Thread-Geräte automatisch mit Handy **und** ioBroker (Multi-Admin),
 ohne manuelle Eingabe am PC.
 
-Details zur Funktionsweise: siehe `docs/walkthrough.md`.
-
 ## Fertige APK herunterladen
 
 Wer die App nur nutzen will (kein eigener Build nötig): fertige APKs liegen unter
@@ -36,7 +34,7 @@ oder selbst baust):
 Dieses Repo enthält **nicht** das komplette Matter-SDK (mehrere GB), sondern nur:
 
 - `patches/CHIPTool/` – die geänderten/neuen Android-Dateien
-- `iobroker/` – Server-seitige Patch-Skripte + das Vermittler-Skript für ioBroker
+- `iobroker/` – das Vermittler-Skript für ioBroker (`matter_pairing_code.js`)
 - `scripts/setup.sh` – klont connectedhomeip auf einem gepinnten Commit und wendet den Patch an
 - `.devcontainer/` – fertige Docker-Entwicklungsumgebung (VS Code "Reopen in Container")
 
