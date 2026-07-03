@@ -1,0 +1,22 @@
+{
+    "name": "SLZB-Matter Connect – Build Environment",
+    "image": "ghcr.io/project-chip/chip-build-android:200",
+    "workspaceFolder": "/workspace",
+    "runArgs": [
+        "--add-host=host.docker.internal:host-gateway"
+    ],
+    "postCreateCommand": "bash scripts/setup.sh",
+    "remoteUser": "vscode",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.cpptools",
+                "redhat.vscode-yaml",
+                "vscjava.vscode-java-pack"
+            ],
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash"
+            }
+        }
+    }
+}

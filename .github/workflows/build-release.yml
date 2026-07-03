@@ -1,0 +1,38 @@
+name: Build APK on Release
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch: {}   # manuelles Anstoßen zum Testen
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/project-chip/chip-build-android:200
+    steps:
+      - name: Checkout Companion-Repo
+        uses: actions/checkout@v4
+
+      - name: Cache Matter-SDK-Build & Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            matter-sdk/out
+            ~/.gradle
+          key: matter-android-${{ hashFiles('scripts/setup.sh', 'patches/**') }}
+          restore-keys: |
+            matter-android-
+
+      - name: Setup (SDK klonen + Patch anwenden + Bootstrap)
+        run: bash scripts/setup.sh
+
+      - name: APK bauen
+        run: ./build_app.sh
+
+      - name: APK an Release anhängen
+        uses: softprops/action-gh-release@v2
+        with:
+          files: matter-sdk/out/android-arm64-chip-tool/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

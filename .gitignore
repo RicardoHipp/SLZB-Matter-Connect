@@ -1,0 +1,20 @@
+# Das komplette Matter-SDK wird von scripts/setup.sh geklont, nicht committet
+matter-sdk/
+out/
+*.apk
+
+# Build-Artefakte
+.gradle/
+build/
+*.class
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
