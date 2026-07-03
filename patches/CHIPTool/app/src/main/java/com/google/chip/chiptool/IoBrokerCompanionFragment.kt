@@ -40,6 +40,7 @@ class IoBrokerCompanionFragment : Fragment() {
         get() = ChipClient.getDeviceController(requireContext())
 
     private lateinit var stickIpEd: TextInputEditText
+    private lateinit var stickPortEd: TextInputEditText
     private lateinit var fetchCredentialsBtn: MaterialButton
     private lateinit var threadInfoCard: MaterialCardView
     private lateinit var threadNameTv: TextView
@@ -71,6 +72,7 @@ class IoBrokerCompanionFragment : Fragment() {
         val view = inflater.inflate(R.layout.fragment_iobroker_companion, container, false)
 
         stickIpEd = view.findViewById(R.id.stickIpEd)
+        stickPortEd = view.findViewById(R.id.stickPortEd)
         fetchCredentialsBtn = view.findViewById(R.id.fetchCredentialsBtn)
         threadInfoCard = view.findViewById(R.id.threadInfoCard)
         threadNameTv = view.findViewById(R.id.threadNameTv)
@@ -100,6 +102,8 @@ class IoBrokerCompanionFragment : Fragment() {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val savedIp = prefs.getString("stick_ip", "192.168.179.148")
         stickIpEd.setText(savedIp)
+        val savedStickPort = prefs.getString("stick_port", "8080")
+        stickPortEd.setText(savedStickPort)
 
         val savedIobrokerIp = prefs.getString("iobroker_ip", "")
         val savedIobrokerPort = prefs.getString("iobroker_port", "8087")
@@ -165,19 +169,20 @@ class IoBrokerCompanionFragment : Fragment() {
 
     private fun fetchThreadCredentials() {
         val ip = stickIpEd.text.toString().trim()
-        if (ip.isBlank()) {
-            Toast.makeText(requireContext(), "Bitte IP-Adresse eingeben", Toast.LENGTH_SHORT).show()
+        val port = stickPortEd.text.toString().trim()
+        if (ip.isBlank() || port.isBlank()) {
+            Toast.makeText(requireContext(), "Bitte IP-Adresse und Port eingeben", Toast.LENGTH_SHORT).show()
             return
         }
 
-        // Cache IP
+        // Cache IP + Port
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("stick_ip", ip).apply()
+        prefs.edit().putString("stick_ip", ip).putString("stick_port", port).apply()
 
         viewLifecycleOwner.lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 try {
-                    val url = URL("http://$ip:8080/node/dataset/active")
+                    val url = URL("http://$ip:$port/node/dataset/active")
                     val conn = url.openConnection() as HttpURLConnection
                     conn.requestMethod = "GET"
                     conn.connectTimeout = 4000
@@ -227,7 +232,7 @@ class IoBrokerCompanionFragment : Fragment() {
                     Toast.makeText(requireContext(), "Fehler beim Parsen der Daten", Toast.LENGTH_SHORT).show()
                 }
             } else {
-                Toast.makeText(requireContext(), "Verbindung fehlgeschlagen (IP prüfen)", Toast.LENGTH_LONG).show()
+                Toast.makeText(requireContext(), "Verbindung fehlgeschlagen (IP/Port prüfen)", Toast.LENGTH_LONG).show()
             }
         }
     }
