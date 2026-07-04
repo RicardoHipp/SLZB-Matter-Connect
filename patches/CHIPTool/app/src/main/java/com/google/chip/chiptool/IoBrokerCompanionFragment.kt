@@ -11,6 +11,7 @@ import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -115,7 +116,8 @@ class IoBrokerCompanionFragment : Fragment() {
             emptyList(),
             onToggle = { nodeId, isChecked -> sendOnOffCommand(nodeId, isChecked) },
             onShare = { nodeId -> shareDevice(nodeId) },
-            onUnpair = { nodeId -> unpairDevice(nodeId) }
+            onUnpair = { nodeId -> unpairDevice(nodeId) },
+            onRename = { nodeId -> showRenameDialog(nodeId) }
         )
         tabDevicesLayout.adapter = deviceAdapter
 
@@ -354,12 +356,13 @@ class IoBrokerCompanionFragment : Fragment() {
         deviceAdapter.updateDevices(nodeIds)
 
         // Gespeicherte Namen und Pairing-Codes sofort anzeigen
-        // (auch wenn das Gerät gerade schläft/offline ist)
+        // (auch wenn das Gerät gerade schläft/offline ist).
+        // Eigener Name (custom) hat Vorrang vor dem vom Geraet gemeldeten.
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         nodeIds.forEach { nodeId ->
-            prefs.getString("device_name_$nodeId", null)?.let { name ->
-                deviceAdapter.updateName(nodeId, name)
-            }
+            val name = prefs.getString("device_custom_name_$nodeId", null)
+                ?: prefs.getString("device_name_$nodeId", null)
+            name?.let { deviceAdapter.updateName(nodeId, it) }
             prefs.getString("device_code_$nodeId", null)?.let { code ->
                 deviceAdapter.updateCode(nodeId, code)
             }
@@ -372,6 +375,39 @@ class IoBrokerCompanionFragment : Fragment() {
     // fest einprogrammierten Clusters. Funktioniert dadurch generisch für jeden
     // Thread/Matter-Gerätetyp (Taster, Sensoren, Steckdosen, ...), nicht nur Switches,
     // und dient gleichzeitig als einfacher Live-Test, ob das Thread-Netzwerk steht.
+    // Eigener Name pro Geraet (hat Vorrang vor dem vom Geraet gemeldeten Produktnamen),
+    // damit mehrere gleiche Geraete unterscheidbar bleiben. Nur lokal in der App.
+    private fun showRenameDialog(nodeId: Long) {
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        val currentName = prefs.getString("device_custom_name_$nodeId", null)
+            ?: prefs.getString("device_name_$nodeId", null)
+            ?: ""
+
+        val input = EditText(requireContext()).apply {
+            setText(currentName)
+            hint = "Eigener Name"
+            setSelection(text.length)
+        }
+
+        AlertDialog.Builder(requireContext())
+            .setTitle("Gerät umbenennen")
+            .setView(input)
+            .setPositiveButton("Speichern") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isNotBlank()) {
+                    prefs.edit().putString("device_custom_name_$nodeId", newName).apply()
+                    deviceAdapter.updateName(nodeId, newName)
+                }
+            }
+            .setNeutralButton("Zurücksetzen") { _, _ ->
+                prefs.edit().remove("device_custom_name_$nodeId").apply()
+                val reportedName = prefs.getString("device_name_$nodeId", null)
+                deviceAdapter.updateName(nodeId, reportedName ?: "")
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
     private fun subscribeToDeviceUpdates(nodeId: Long) {
         if (subscribedNodeIds.contains(nodeId)) return
         subscribedNodeIds.add(nodeId)
@@ -400,8 +436,11 @@ class IoBrokerCompanionFragment : Fragment() {
                             val prefs = requireActivity()
                                 .getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
                             prefs.edit().putString("device_name_$nodeId", name).apply()
-                            requireActivity().runOnUiThread {
-                                deviceAdapter.updateName(nodeId, name)
+                            // Nur anzeigen, wenn der Nutzer keinen eigenen Namen vergeben hat
+                            if (prefs.getString("device_custom_name_$nodeId", null) == null) {
+                                requireActivity().runOnUiThread {
+                                    deviceAdapter.updateName(nodeId, name)
+                                }
                             }
                         }
 
@@ -634,7 +673,8 @@ class DeviceAdapter(
     private var devices: List<Long>,
     private val onToggle: (Long, Boolean) -> Unit,
     private val onShare: (Long) -> Unit,
-    private val onUnpair: (Long) -> Unit
+    private val onUnpair: (Long) -> Unit,
+    private val onRename: (Long) -> Unit
 ) : RecyclerView.Adapter<DeviceAdapter.ViewHolder>() {
 
     private val statuses = mutableMapOf<Long, String>()
@@ -658,7 +698,8 @@ class DeviceAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val nodeId = devices[position]
         val name = names[nodeId]
-        holder.nameTv.text = if (name != null) "$name (ID: $nodeId)" else "Gerät (Node ID: $nodeId)"
+        holder.nameTv.text = if (!name.isNullOrBlank()) "$name (ID: $nodeId)" else "Gerät (Node ID: $nodeId)"
+        holder.nameTv.setOnClickListener { onRename(nodeId) }
         val code = codes[nodeId]
         if (code != null) {
             holder.codeTv.text = "Pairing-Code: $code"
