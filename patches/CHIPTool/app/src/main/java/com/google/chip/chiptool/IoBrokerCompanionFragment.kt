@@ -352,6 +352,15 @@ class IoBrokerCompanionFragment : Fragment() {
             }
         }
         deviceAdapter.updateDevices(nodeIds)
+
+        // Gespeicherte Namen sofort anzeigen (auch wenn das Gerät gerade schläft/offline ist)
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        nodeIds.forEach { nodeId ->
+            prefs.getString("device_name_$nodeId", null)?.let { name ->
+                deviceAdapter.updateName(nodeId, name)
+            }
+        }
+
         nodeIds.forEach { nodeId -> subscribeToDeviceUpdates(nodeId) }
     }
 
@@ -372,6 +381,26 @@ class IoBrokerCompanionFragment : Fragment() {
                 val callback = object : ReportCallback {
                     override fun onReport(nodeState: NodeState?) {
                         if (nodeState == null) return
+
+                        // Geraetename aus Basic Information (EP0/Cluster 40) ziehen:
+                        // NodeLabel (Attr 5, vom Nutzer vergeben) bevorzugt, sonst ProductName (Attr 3)
+                        val basicInfo = nodeState.getEndpointState(0)?.getClusterState(40L)
+                        val nodeLabel = basicInfo?.getAttributeState(5L)?.value as? String
+                        val productName = basicInfo?.getAttributeState(3L)?.value as? String
+                        val name = when {
+                            !nodeLabel.isNullOrBlank() -> nodeLabel
+                            !productName.isNullOrBlank() -> productName
+                            else -> null
+                        }
+                        if (name != null) {
+                            val prefs = requireActivity()
+                                .getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+                            prefs.edit().putString("device_name_$nodeId", name).apply()
+                            requireActivity().runOnUiThread {
+                                deviceAdapter.updateName(nodeId, name)
+                            }
+                        }
+
                         var summary: String? = null
                         for ((endpointId, endpointState) in nodeState.endpointStates) {
                             for ((clusterId, clusterState) in endpointState.clusterStates) {
@@ -597,6 +626,7 @@ class DeviceAdapter(
 ) : RecyclerView.Adapter<DeviceAdapter.ViewHolder>() {
 
     private val statuses = mutableMapOf<Long, String>()
+    private val names = mutableMapOf<Long, String>()
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val nameTv: TextView = view.findViewById(R.id.deviceNameTv)
@@ -613,7 +643,8 @@ class DeviceAdapter(
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val nodeId = devices[position]
-        holder.nameTv.text = "Gerät (Node ID: $nodeId)"
+        val name = names[nodeId]
+        holder.nameTv.text = if (name != null) "$name (ID: $nodeId)" else "Gerät (Node ID: $nodeId)"
         holder.statusTv.text = statuses[nodeId] ?: "Noch keine Live-Daten"
 
         holder.toggleSwitch.setOnCheckedChangeListener(null)
@@ -635,6 +666,15 @@ class DeviceAdapter(
 
     fun updateStatus(nodeId: Long, text: String) {
         statuses[nodeId] = text
+        val index = devices.indexOf(nodeId)
+        if (index >= 0) {
+            notifyItemChanged(index)
+        }
+    }
+
+    fun updateName(nodeId: Long, name: String) {
+        if (names[nodeId] == name) return
+        names[nodeId] = name
         val index = devices.indexOf(nodeId)
         if (index >= 0) {
             notifyItemChanged(index)
