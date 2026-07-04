@@ -19,8 +19,12 @@ import androidx.recyclerview.widget.RecyclerView
 import chip.devicecontroller.ChipDeviceController
 import chip.devicecontroller.InvokeCallback
 import chip.devicecontroller.OpenCommissioningCallback
+import chip.devicecontroller.ReportCallback
 import chip.devicecontroller.UnpairDeviceCallback
+import chip.devicecontroller.model.ChipAttributePath
+import chip.devicecontroller.model.ChipEventPath
 import chip.devicecontroller.model.InvokeElement
+import chip.devicecontroller.model.NodeState
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import androidx.appcompat.widget.SwitchCompat
@@ -32,6 +36,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import matter.tlv.AnonymousTag
+import matter.tlv.TlvReader
 import matter.tlv.TlvWriter
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -54,6 +59,7 @@ class IoBrokerCompanionFragment : Fragment() {
     private lateinit var tabLayout: TabLayout
 
     private lateinit var deviceAdapter: DeviceAdapter
+    private val subscribedNodeIds = mutableSetOf<Long>()
 
     // Gespeicherte Thread-Daten
     private var fetchedChannel: Int? = null
@@ -292,6 +298,76 @@ class IoBrokerCompanionFragment : Fragment() {
             }
         }
         deviceAdapter.updateDevices(nodeIds)
+        nodeIds.forEach { nodeId -> subscribeToSwitchEvents(nodeId) }
+    }
+
+    // Abonniert das CurrentPosition-Attribut des Switch-Clusters (0x003B), damit
+    // Tastendrücke live in der Geräteliste sichtbar werden UND das gleichzeitig als
+    // einfacher Test dient, ob das Thread-Netzwerk zum Gerät gerade grundsaetzlich funktioniert.
+    private fun subscribeToSwitchEvents(nodeId: Long) {
+        if (subscribedNodeIds.contains(nodeId)) return
+        subscribedNodeIds.add(nodeId)
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val endpointId = 1
+                val clusterId = 59L // Switch cluster
+                val attributeId = 0L // CurrentPosition
+
+                val device = withContext(Dispatchers.IO) {
+                    ChipClient.getConnectedDevicePointer(requireContext(), nodeId)
+                }
+
+                val callback = object : ReportCallback {
+                    override fun onReport(nodeState: NodeState?) {
+                        val tlv = nodeState
+                            ?.getEndpointState(endpointId)
+                            ?.getClusterState(clusterId)
+                            ?.getAttributeState(attributeId)
+                            ?.tlv ?: return
+                        val position = try {
+                            TlvReader(tlv).getInt(AnonymousTag)
+                        } catch (e: Exception) {
+                            return
+                        }
+                        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.GERMANY)
+                            .format(java.util.Date())
+                        val text = if (position != 0) {
+                            "Taste gedrückt ($time) — Thread-Netzwerk OK"
+                        } else {
+                            "Bereit, letztes Signal: $time"
+                        }
+                        requireActivity().runOnUiThread {
+                            deviceAdapter.updateStatus(nodeId, text)
+                        }
+                    }
+
+                    override fun onError(
+                        attributePath: ChipAttributePath?,
+                        eventPath: ChipEventPath?,
+                        ex: Exception
+                    ) {
+                        Log.e("Companion", "Switch subscribe error for $nodeId", ex)
+                        requireActivity().runOnUiThread {
+                            deviceAdapter.updateStatus(nodeId, "Keine Verbindung zum Gerät")
+                        }
+                    }
+                }
+
+                deviceController.subscribeToAttributePath(
+                    { Log.i("Companion", "Switch-Subscription für $nodeId etabliert") },
+                    callback,
+                    device,
+                    listOf(ChipAttributePath.newInstance(endpointId, clusterId, attributeId)),
+                    1,
+                    30,
+                    0
+                )
+            } catch (e: Exception) {
+                Log.e("Companion", "Failed to subscribe switch events for $nodeId", e)
+                subscribedNodeIds.remove(nodeId)
+            }
+        }
     }
 
     private fun sendOnOffCommand(nodeId: Long, turnOn: Boolean) {
@@ -331,6 +407,22 @@ class IoBrokerCompanionFragment : Fragment() {
         }
     }
 
+    // 12-bit discriminator, 0 ausgeschlossen (reserviert)
+    private fun generateRandomDiscriminator(): Int = (1..4095).random()
+
+    // Matter-Spec: gueltiger Bereich 1..99999998, bestimmte Trivial-Codes verboten
+    private fun generateRandomSetupPinCode(): Long {
+        val invalidCodes = setOf(
+            11111111L, 22222222L, 33333333L, 44444444L, 55555555L,
+            66666666L, 77777777L, 88888888L, 99999999L, 12345678L, 87654321L
+        )
+        var pin: Long
+        do {
+            pin = (1..99999998).random().toLong()
+        } while (pin in invalidCodes)
+        return pin
+    }
+
     private fun shareDevice(nodeId: Long) {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val iobrokerIp = prefs.getString("iobroker_ip", "") ?: ""
@@ -349,8 +441,8 @@ class IoBrokerCompanionFragment : Fragment() {
                 }
                 val testDuration = 180
                 val testIteration = 1000
-                val testDiscriminator = 3840
-                val testSetupPinCode = 20202021L
+                val testDiscriminator = generateRandomDiscriminator()
+                val testSetupPinCode = generateRandomSetupPinCode()
                 deviceController.openPairingWindowWithPINCallback(
                     devicePointer,
                     testDuration,
@@ -451,8 +543,11 @@ class DeviceAdapter(
     private val onUnpair: (Long) -> Unit
 ) : RecyclerView.Adapter<DeviceAdapter.ViewHolder>() {
 
+    private val statuses = mutableMapOf<Long, String>()
+
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val nameTv: TextView = view.findViewById(R.id.deviceNameTv)
+        val statusTv: TextView = view.findViewById(R.id.deviceStatusTv)
         val toggleSwitch: SwitchCompat = view.findViewById(R.id.deviceToggleSwitch)
         val shareBtn: Button = view.findViewById(R.id.shareDeviceBtn)
         val unpairBtn: Button = view.findViewById(R.id.unpairDeviceBtn)
@@ -466,6 +561,7 @@ class DeviceAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val nodeId = devices[position]
         holder.nameTv.text = "Gerät (Node ID: $nodeId)"
+        holder.statusTv.text = statuses[nodeId] ?: "Noch keine Live-Daten"
 
         holder.toggleSwitch.setOnCheckedChangeListener(null)
         holder.toggleSwitch.isChecked = false
@@ -482,5 +578,13 @@ class DeviceAdapter(
     fun updateDevices(newDevices: List<Long>) {
         this.devices = newDevices
         notifyDataSetChanged()
+    }
+
+    fun updateStatus(nodeId: Long, text: String) {
+        statuses[nodeId] = text
+        val index = devices.indexOf(nodeId)
+        if (index >= 0) {
+            notifyItemChanged(index)
+        }
     }
 }

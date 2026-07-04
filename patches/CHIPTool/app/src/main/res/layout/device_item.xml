@@ -40,6 +40,15 @@
                 android:layout_centerVertical="true"/>
         </RelativeLayout>
 
+        <TextView
+            android:id="@+id/deviceStatusTv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Noch keine Live-Daten"
+            android:textColor="#A0A0A0"
+            android:textSize="13sp"
+            android:layout_marginBottom="8dp"/>
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
