@@ -45,6 +45,16 @@
         </RelativeLayout>
 
         <TextView
+            android:id="@+id/deviceCodeTv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:visibility="gone"
+            android:textColor="#7A9CC6"
+            android:textSize="13sp"
+            android:layout_marginBottom="4dp"/>
+
+        <TextView
             android:id="@+id/deviceStatusTv"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

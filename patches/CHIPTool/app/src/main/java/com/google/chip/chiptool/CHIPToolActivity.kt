@@ -85,6 +85,48 @@ class CHIPToolActivity :
 
   override fun onCHIPDeviceInfoReceived(deviceInfo: CHIPDeviceInfo) {
     this.deviceInfo = deviceInfo
+
+    // Duplikat-Check: gleicher Setup-PIN wie ein bereits angelerntes Geraet?
+    // (Der aufgedruckte PIN ist pro Geraet fest, daher ein brauchbarer Fingerabdruck.)
+    val devicePrefs = getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+    val existingNodeIds = DeviceIdUtil.getCommissionedNodeId(this).mapNotNull {
+      try { it.toLong(16) } catch (e: Exception) { null }
+    }
+    val duplicateNodeId = existingNodeIds.firstOrNull { nodeId ->
+      devicePrefs.getString("device_pin_$nodeId", null) == deviceInfo.setupPinCode.toString()
+    }
+    if (duplicateNodeId != null) {
+      val knownName =
+        devicePrefs.getString("device_name_$duplicateNodeId", null) ?: "Node $duplicateNodeId"
+      AlertDialog.Builder(this)
+        .setTitle("Gerät bereits angelernt")
+        .setMessage(
+          "Dieses Gerät ist bereits als \"$knownName\" (ID: $duplicateNodeId) in der Liste.\n\n" +
+            "Bitte zuerst dort entkoppeln, bevor es neu angelernt wird."
+        )
+        .setPositiveButton("OK", null)
+        .show()
+      showFragment(IoBrokerCompanionFragment.newInstance(), false)
+      return
+    }
+
+    // Aufgedruckten Zahlencode aus dem Payload ableiten und vormerken,
+    // damit er nach erfolgreicher Koppelung zum Geraet gespeichert werden kann
+    try {
+      val manualCode =
+        OnboardingPayloadParser().getManualPairingCodeFromPayload(deviceInfo.toSetupPayload())
+      devicePrefs.edit()
+        .putString("pending_pairing_code", manualCode)
+        .putString("pending_pin", deviceInfo.setupPinCode.toString())
+        .apply()
+    } catch (e: Exception) {
+      Log.w(TAG, "Could not derive manual pairing code", e)
+      devicePrefs.edit()
+        .remove("pending_pairing_code")
+        .putString("pending_pin", deviceInfo.setupPinCode.toString())
+        .apply()
+    }
+
     if (networkType == null) {
       showFragment(CHIPDeviceDetailsFragment.newInstance(deviceInfo))
     } else {
@@ -127,6 +169,19 @@ class CHIPToolActivity :
         .show()
     }
     DeviceIdUtil.setCommissionedNodeId(this, nodeId)
+
+    // Vorgemerkten Pairing-Code/PIN jetzt dauerhaft diesem Geraet zuordnen
+    // (fuer Anzeige in der Geraeteliste und den Duplikat-Check beim Scannen)
+    val devicePrefs = getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+    val editor = devicePrefs.edit()
+    devicePrefs.getString("pending_pairing_code", null)?.let {
+      editor.putString("device_code_$nodeId", it)
+    }
+    devicePrefs.getString("pending_pin", null)?.let {
+      editor.putString("device_pin_$nodeId", it)
+    }
+    editor.remove("pending_pairing_code").remove("pending_pin").apply()
+
     ChipClient.getDeviceController(this).close()
     showFragment(IoBrokerCompanionFragment.newInstance(), false)
   }

@@ -353,11 +353,15 @@ class IoBrokerCompanionFragment : Fragment() {
         }
         deviceAdapter.updateDevices(nodeIds)
 
-        // Gespeicherte Namen sofort anzeigen (auch wenn das Gerät gerade schläft/offline ist)
+        // Gespeicherte Namen und Pairing-Codes sofort anzeigen
+        // (auch wenn das Gerät gerade schläft/offline ist)
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         nodeIds.forEach { nodeId ->
             prefs.getString("device_name_$nodeId", null)?.let { name ->
                 deviceAdapter.updateName(nodeId, name)
+            }
+            prefs.getString("device_code_$nodeId", null)?.let { code ->
+                deviceAdapter.updateCode(nodeId, code)
             }
         }
 
@@ -606,6 +610,14 @@ class IoBrokerCompanionFragment : Fragment() {
                     }
                 })
                 DeviceIdUtil.removeCommissionedNodeId(requireContext(), nodeId)
+                // Gespeicherte Metadaten (Name, Pairing-Code, PIN) mit aufraeumen,
+                // damit der Duplikat-Check ein Neu-Anlernen wieder zulaesst
+                requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .remove("device_name_$nodeId")
+                    .remove("device_code_$nodeId")
+                    .remove("device_pin_$nodeId")
+                    .apply()
                 refreshDeviceList()
                 Toast.makeText(requireContext(), "Gerät gelöscht!", Toast.LENGTH_SHORT).show()
             }
@@ -627,9 +639,11 @@ class DeviceAdapter(
 
     private val statuses = mutableMapOf<Long, String>()
     private val names = mutableMapOf<Long, String>()
+    private val codes = mutableMapOf<Long, String>()
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val nameTv: TextView = view.findViewById(R.id.deviceNameTv)
+        val codeTv: TextView = view.findViewById(R.id.deviceCodeTv)
         val statusTv: TextView = view.findViewById(R.id.deviceStatusTv)
         val toggleSwitch: SwitchCompat = view.findViewById(R.id.deviceToggleSwitch)
         val shareBtn: Button = view.findViewById(R.id.shareDeviceBtn)
@@ -645,6 +659,13 @@ class DeviceAdapter(
         val nodeId = devices[position]
         val name = names[nodeId]
         holder.nameTv.text = if (name != null) "$name (ID: $nodeId)" else "Gerät (Node ID: $nodeId)"
+        val code = codes[nodeId]
+        if (code != null) {
+            holder.codeTv.text = "Pairing-Code: $code"
+            holder.codeTv.visibility = View.VISIBLE
+        } else {
+            holder.codeTv.visibility = View.GONE
+        }
         holder.statusTv.text = statuses[nodeId] ?: "Noch keine Live-Daten"
 
         holder.toggleSwitch.setOnCheckedChangeListener(null)
@@ -675,6 +696,15 @@ class DeviceAdapter(
     fun updateName(nodeId: Long, name: String) {
         if (names[nodeId] == name) return
         names[nodeId] = name
+        val index = devices.indexOf(nodeId)
+        if (index >= 0) {
+            notifyItemChanged(index)
+        }
+    }
+
+    fun updateCode(nodeId: Long, code: String) {
+        if (codes[nodeId] == code) return
+        codes[nodeId] = code
         val index = devices.indexOf(nodeId)
         if (index >= 0) {
             notifyItemChanged(index)
