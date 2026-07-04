@@ -1,6 +1,9 @@
 package com.google.chip.chiptool
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -10,8 +13,10 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.Toolbar
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -23,6 +28,7 @@ import chip.devicecontroller.ReportCallback
 import chip.devicecontroller.UnpairDeviceCallback
 import chip.devicecontroller.model.ChipAttributePath
 import chip.devicecontroller.model.ChipEventPath
+import chip.devicecontroller.model.ChipPathId
 import chip.devicecontroller.model.InvokeElement
 import chip.devicecontroller.model.NodeState
 import com.google.android.material.button.MaterialButton
@@ -61,6 +67,20 @@ class IoBrokerCompanionFragment : Fragment() {
     private lateinit var deviceAdapter: DeviceAdapter
     private val subscribedNodeIds = mutableSetOf<Long>()
 
+    private val permissionRequest =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grantResults ->
+            if (grantResults.values.any { !it }) {
+                AlertDialog.Builder(requireContext())
+                    .setTitle("Berechtigungen benötigt")
+                    .setMessage(
+                        "Ohne Bluetooth- und Standort-Berechtigung kann kein neues Gerät angelernt werden."
+                    )
+                    .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
+                    .setCancelable(false)
+                    .show()
+            }
+        }
+
     // Gespeicherte Thread-Daten
     private var fetchedChannel: Int? = null
     private var fetchedPanIdHex: String? = null
@@ -73,6 +93,10 @@ class IoBrokerCompanionFragment : Fragment() {
         savedInstanceState: Bundle?
     ): View? {
         val view = inflater.inflate(R.layout.fragment_iobroker_companion, container, false)
+
+        if (!hasRequiredPermissions()) {
+            permissionRequest.launch(requiredPermissions())
+        }
 
         toolbar = view.findViewById(R.id.toolbar)
         threadInfoCard = view.findViewById(R.id.threadInfoCard)
@@ -115,10 +139,15 @@ class IoBrokerCompanionFragment : Fragment() {
         startCommissioningBtn.setOnClickListener { startScanning() }
 
         // Hinweis beim ersten Start bzw. solange ioBroker nicht eingerichtet ist
+        // (per view.post, da die View an dieser Stelle noch nicht im Fenster verankert ist)
         if (savedIobrokerIp.isNullOrBlank()) {
-            Snackbar.make(view, "Bitte zuerst Stick- und ioBroker-Verbindung einrichten", Snackbar.LENGTH_INDEFINITE)
-                .setAction("Einstellungen") { showSettingsDialog() }
-                .show()
+            view.post {
+                if (isAdded) {
+                    Snackbar.make(view, "Bitte zuerst Stick- und ioBroker-Verbindung einrichten", Snackbar.LENGTH_INDEFINITE)
+                        .setAction("Einstellungen") { showSettingsDialog() }
+                        .show()
+                }
+            }
         }
 
         // Setup Tabs
@@ -143,6 +172,25 @@ class IoBrokerCompanionFragment : Fragment() {
         }
 
         return view
+    }
+
+    private fun requiredPermissions(): Array<String> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.CAMERA
+            )
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun hasRequiredPermissions(): Boolean {
+        return requiredPermissions().all {
+            ContextCompat.checkSelfPermission(requireContext(), it) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     private fun showSettingsDialog() {
@@ -278,6 +326,12 @@ class IoBrokerCompanionFragment : Fragment() {
                 .show()
             return
         }
+        if (!hasRequiredPermissions()) {
+            Snackbar.make(requireView(), "Bluetooth-/Standort-Berechtigung fehlt noch", Snackbar.LENGTH_LONG)
+                .setAction("Erlauben") { permissionRequest.launch(requiredPermissions()) }
+                .show()
+            return
+        }
         val activity = requireActivity() as CHIPToolActivity
         activity.setNetworkType(com.google.chip.chiptool.provisioning.ProvisionNetworkType.THREAD)
 
@@ -298,45 +352,38 @@ class IoBrokerCompanionFragment : Fragment() {
             }
         }
         deviceAdapter.updateDevices(nodeIds)
-        nodeIds.forEach { nodeId -> subscribeToSwitchEvents(nodeId) }
+        nodeIds.forEach { nodeId -> subscribeToDeviceUpdates(nodeId) }
     }
 
-    // Abonniert das CurrentPosition-Attribut des Switch-Clusters (0x003B), damit
-    // Tastendrücke live in der Geräteliste sichtbar werden UND das gleichzeitig als
-    // einfacher Test dient, ob das Thread-Netzwerk zum Gerät gerade grundsaetzlich funktioniert.
-    private fun subscribeToSwitchEvents(nodeId: Long) {
+    // Abonniert ALLE Endpoints/Cluster/Attribute des Geräts (Wildcard) statt eines
+    // fest einprogrammierten Clusters. Funktioniert dadurch generisch für jeden
+    // Thread/Matter-Gerätetyp (Taster, Sensoren, Steckdosen, ...), nicht nur Switches,
+    // und dient gleichzeitig als einfacher Live-Test, ob das Thread-Netzwerk steht.
+    private fun subscribeToDeviceUpdates(nodeId: Long) {
         if (subscribedNodeIds.contains(nodeId)) return
         subscribedNodeIds.add(nodeId)
 
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val endpointId = 1
-                val clusterId = 59L // Switch cluster
-                val attributeId = 0L // CurrentPosition
-
                 val device = withContext(Dispatchers.IO) {
                     ChipClient.getConnectedDevicePointer(requireContext(), nodeId)
                 }
 
                 val callback = object : ReportCallback {
                     override fun onReport(nodeState: NodeState?) {
-                        val tlv = nodeState
-                            ?.getEndpointState(endpointId)
-                            ?.getClusterState(clusterId)
-                            ?.getAttributeState(attributeId)
-                            ?.tlv ?: return
-                        val position = try {
-                            TlvReader(tlv).getInt(AnonymousTag)
-                        } catch (e: Exception) {
-                            return
+                        if (nodeState == null) return
+                        var summary: String? = null
+                        for ((endpointId, endpointState) in nodeState.endpointStates) {
+                            for ((clusterId, clusterState) in endpointState.clusterStates) {
+                                for ((attributeId, attributeState) in clusterState.attributeStates) {
+                                    summary = "EP$endpointId/Cl$clusterId/Attr$attributeId = ${attributeState.value}"
+                                }
+                            }
                         }
+                        if (summary == null) return
                         val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.GERMANY)
                             .format(java.util.Date())
-                        val text = if (position != 0) {
-                            "Taste gedrückt ($time) — Thread-Netzwerk OK"
-                        } else {
-                            "Bereit, letztes Signal: $time"
-                        }
+                        val text = "Update ($time): $summary — Thread-Netzwerk OK"
                         requireActivity().runOnUiThread {
                             deviceAdapter.updateStatus(nodeId, text)
                         }
@@ -347,7 +394,7 @@ class IoBrokerCompanionFragment : Fragment() {
                         eventPath: ChipEventPath?,
                         ex: Exception
                     ) {
-                        Log.e("Companion", "Switch subscribe error for $nodeId", ex)
+                        Log.e("Companion", "Subscribe error for $nodeId", ex)
                         requireActivity().runOnUiThread {
                             deviceAdapter.updateStatus(nodeId, "Keine Verbindung zum Gerät")
                         }
@@ -355,16 +402,22 @@ class IoBrokerCompanionFragment : Fragment() {
                 }
 
                 deviceController.subscribeToAttributePath(
-                    { Log.i("Companion", "Switch-Subscription für $nodeId etabliert") },
+                    { Log.i("Companion", "Wildcard-Subscription für $nodeId etabliert") },
                     callback,
                     device,
-                    listOf(ChipAttributePath.newInstance(endpointId, clusterId, attributeId)),
+                    listOf(
+                        ChipAttributePath.newInstance(
+                            ChipPathId.forWildcard(),
+                            ChipPathId.forWildcard(),
+                            ChipPathId.forWildcard()
+                        )
+                    ),
                     1,
                     30,
                     0
                 )
             } catch (e: Exception) {
-                Log.e("Companion", "Failed to subscribe switch events for $nodeId", e)
+                Log.e("Companion", "Failed to subscribe device updates for $nodeId", e)
                 subscribedNodeIds.remove(nodeId)
             }
         }
