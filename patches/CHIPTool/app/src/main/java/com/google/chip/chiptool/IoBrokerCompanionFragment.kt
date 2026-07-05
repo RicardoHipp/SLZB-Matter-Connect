@@ -610,6 +610,69 @@ class IoBrokerCompanionFragment : Fragment() {
         return pin
     }
 
+    private class ShareProgress(val dialog: AlertDialog, val textView: TextView)
+
+    // Kleiner, nicht abbrechbarer Fortschritts-Dialog mit Spinner + aktualisierbarem Text.
+    private fun showShareProgress(initialText: String): ShareProgress {
+        val ctx = requireContext()
+        val density = resources.displayMetrics.density
+        val pad = (20 * density).toInt()
+        val container = android.widget.LinearLayout(ctx).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(pad, pad, pad, pad)
+        }
+        val size = (34 * density).toInt()
+        container.addView(
+            android.widget.ProgressBar(ctx).apply { isIndeterminate = true },
+            android.widget.LinearLayout.LayoutParams(size, size)
+        )
+        val tv = TextView(ctx).apply {
+            text = initialText
+            setPadding(pad, 0, 0, 0)
+            setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_on))
+        }
+        container.addView(tv)
+        val dlg = AlertDialog.Builder(ctx)
+            .setTitle("Für ioBroker freigeben")
+            .setView(container)
+            .setCancelable(false)
+            .create()
+        dlg.show()
+        return ShareProgress(dlg, tv)
+    }
+
+    private fun updateShareProgress(p: ShareProgress, text: String) {
+        activity?.runOnUiThread { if (isAdded) p.textView.text = text }
+    }
+
+    // Pollt javascript.0.matter_pairing_result bis 'success'/'error'/Timeout (max. 2 Min).
+    // Rueckgabe: (status, message) mit status in {"success","error","timeout"}.
+    private suspend fun pollPairingResult(ip: String, port: String): Pair<String, String> {
+        val deadline = System.currentTimeMillis() + 120_000
+        while (System.currentTimeMillis() < deadline) {
+            kotlinx.coroutines.delay(1500)
+            val value = withContext(Dispatchers.IO) {
+                try {
+                    val url = URL("http://$ip:$port/get/javascript.0.matter_pairing_result")
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.connectTimeout = 3000
+                    conn.readTimeout = 3000
+                    if (conn.responseCode == 200) {
+                        val body = conn.inputStream.bufferedReader().use { it.readText() }
+                        try { JSONObject(body).optString("val", "") } catch (e: Exception) { "" }
+                    } else ""
+                } catch (e: Exception) { "" }
+            }
+            when {
+                value == "success" -> return Pair("success", "")
+                value.startsWith("error") -> return Pair("error", value.removePrefix("error:").trim())
+                // "" oder "processing" -> weiter warten
+            }
+        }
+        return Pair("timeout", "")
+    }
+
     private fun shareDevice(nodeId: Long) {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val iobrokerIp = prefs.getString("iobroker_ip", "") ?: ""
@@ -622,11 +685,16 @@ class IoBrokerCompanionFragment : Fragment() {
             return
         }
 
+        // Sofort-Feedback: Spinner-Dialog, damit klar ist dass etwas laeuft (verhindert Doppel-Tippen).
+        val progress = showShareProgress("Verbinde mit Gerät…")
+
         viewLifecycleOwner.lifecycleScope.launch {
             try {
                 val devicePointer = withContext(Dispatchers.IO) {
                     ChipClient.getConnectedDevicePointer(requireContext(), nodeId)
                 }
+                updateShareProgress(progress, "Öffne Koppelungsfenster am Gerät…")
+
                 val testDuration = 180
                 val testIteration = 1000
                 val testDiscriminator = generateRandomDiscriminator()
@@ -639,41 +707,68 @@ class IoBrokerCompanionFragment : Fragment() {
                     testSetupPinCode,
                     object : OpenCommissioningCallback {
                         override fun onError(status: Int, deviceId: Long) {
-                            requireActivity().runOnUiThread {
-                                Toast.makeText(requireContext(), "Fehler beim Öffnen des Koppelungsfensters!", Toast.LENGTH_SHORT).show()
+                            activity?.runOnUiThread {
+                                progress.dialog.dismiss()
+                                if (isAdded) Toast.makeText(requireContext(), "Fehler beim Öffnen des Koppelungsfensters!", Toast.LENGTH_SHORT).show()
                             }
                         }
                         override fun onSuccess(deviceId: Long, manualPairingCode: String?, qrCode: String?) {
-                            if (manualPairingCode != null) {
-                                viewLifecycleOwner.lifecycleScope.launch {
-                                    val apiResult = withContext(Dispatchers.IO) {
-                                        try {
-                                            val url = URL("http://$iobrokerIp:$iobrokerPort/set/javascript.0.matter_pairing_code?value=$manualPairingCode")
-                                            val conn = url.openConnection() as HttpURLConnection
-                                            conn.connectTimeout = 5000
-                                            conn.readTimeout = 5000
-                                            if (conn.responseCode == 200) {
-                                                conn.inputStream.bufferedReader().use { it.readText() }
-                                            } else { null }
-                                        } catch (e: Exception) { null }
-                                    }
-
-                                    requireActivity().runOnUiThread {
-                                        if (apiResult != null) {
-                                            Toast.makeText(requireContext(), "Code automatisch an ioBroker gesendet!", Toast.LENGTH_LONG).show()
-                                            AlertDialog.Builder(requireContext())
-                                                .setTitle("Automatische Koppelung")
-                                                .setMessage("Der Koppelungscode wurde erfolgreich an den ioBroker Matter-Adapter übermittelt!\n\nDas Pairing auf ioBroker läuft nun im Hintergrund.\n\nCode: $manualPairingCode\nPIN: $testSetupPinCode")
-                                                .setPositiveButton("OK", null)
-                                                .show()
-                                        } else {
-                                            showManualPairingDialog(manualPairingCode, testSetupPinCode)
-                                        }
-                                    }
+                            if (manualPairingCode == null) {
+                                activity?.runOnUiThread {
+                                    progress.dialog.dismiss()
+                                    if (isAdded) showManualPairingDialog("", testSetupPinCode)
                                 }
-                            } else {
-                                requireActivity().runOnUiThread {
-                                    showManualPairingDialog(manualPairingCode ?: "", testSetupPinCode)
+                                return
+                            }
+                            viewLifecycleOwner.lifecycleScope.launch {
+                                updateShareProgress(progress, "Sende Code an ioBroker…")
+                                val sent = withContext(Dispatchers.IO) {
+                                    try {
+                                        // Altes Ergebnis leeren, damit die App keinen Wert der letzten Koppelung liest.
+                                        runCatching {
+                                            val c0 = URL("http://$iobrokerIp:$iobrokerPort/set/javascript.0.matter_pairing_result?value=").openConnection() as HttpURLConnection
+                                            c0.connectTimeout = 4000; c0.readTimeout = 4000; c0.responseCode
+                                        }
+                                        val url = URL("http://$iobrokerIp:$iobrokerPort/set/javascript.0.matter_pairing_code?value=$manualPairingCode")
+                                        val conn = url.openConnection() as HttpURLConnection
+                                        conn.connectTimeout = 5000
+                                        conn.readTimeout = 5000
+                                        conn.responseCode == 200
+                                    } catch (e: Exception) { false }
+                                }
+
+                                if (!sent) {
+                                    // Code kam nicht an -> manueller Weg als Fallback.
+                                    activity?.runOnUiThread {
+                                        progress.dialog.dismiss()
+                                        if (isAdded) showManualPairingDialog(manualPairingCode, testSetupPinCode)
+                                    }
+                                    return@launch
+                                }
+
+                                updateShareProgress(progress, "Angekommen ✓ — ioBroker koppelt jetzt…")
+                                val (resultStatus, resultMsg) = pollPairingResult(iobrokerIp, iobrokerPort)
+
+                                activity?.runOnUiThread {
+                                    progress.dialog.dismiss()
+                                    if (!isAdded) return@runOnUiThread
+                                    when (resultStatus) {
+                                        "success" -> AlertDialog.Builder(requireContext())
+                                            .setTitle("✓ Erfolgreich gekoppelt")
+                                            .setMessage("Das Gerät wurde erfolgreich mit ioBroker gekoppelt.\n\nCode: $manualPairingCode")
+                                            .setPositiveButton("OK", null)
+                                            .show()
+                                        "error" -> AlertDialog.Builder(requireContext())
+                                            .setTitle("✗ Koppelung fehlgeschlagen")
+                                            .setMessage("ioBroker meldet einen Fehler:\n$resultMsg\n\nDu kannst den Code auch manuell in ioBroker eingeben:\nCode: $manualPairingCode\nPIN: $testSetupPinCode")
+                                            .setPositiveButton("OK", null)
+                                            .show()
+                                        else -> AlertDialog.Builder(requireContext())
+                                            .setTitle("Keine Rückmeldung (Timeout)")
+                                            .setMessage("Der Code wurde an ioBroker gesendet, aber es kam innerhalb von 2 Minuten keine Rückmeldung.\n\nBitte in ioBroker (Matter-Adapter) prüfen, ob das Gerät auftaucht.\n\nCode: $manualPairingCode\nPIN: $testSetupPinCode")
+                                            .setPositiveButton("OK", null)
+                                            .show()
+                                    }
                                 }
                             }
                         }
@@ -681,6 +776,10 @@ class IoBrokerCompanionFragment : Fragment() {
                 )
             } catch (e: Exception) {
                 Log.e("Companion", "Sharing failed", e)
+                activity?.runOnUiThread {
+                    progress.dialog.dismiss()
+                    if (isAdded) Toast.makeText(requireContext(), "Freigeben fehlgeschlagen: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
