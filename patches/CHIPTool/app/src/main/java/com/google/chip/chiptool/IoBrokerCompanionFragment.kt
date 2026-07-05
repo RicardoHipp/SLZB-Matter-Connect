@@ -858,6 +858,10 @@ class DeviceAdapter(
     private val statuses = mutableMapOf<Long, String>()
     private val models = mutableMapOf<Long, MatterDeviceModel>()
     private val lastUpdate = mutableMapOf<Long, String>()
+    // Akkumulierte Werte pro Gerät (Subscription liefert nach dem Priming nur Deltas).
+    private val readingAcc = mutableMapOf<Long, MutableMap<String, MatterReading>>()
+    private val switchableAcc = mutableMapOf<Long, Boolean>()
+    private val onOffEpAcc = mutableMapOf<Long, Int>()
     private val names = mutableMapOf<Long, String>()
     private val codes = mutableMapOf<Long, String>()
     private val expandedStates = mutableMapOf<Long, Boolean>()
@@ -956,7 +960,21 @@ class DeviceAdapter(
     }
 
     fun updateModel(nodeId: Long, model: MatterDeviceModel, time: String) {
-        models[nodeId] = model
+        // Delta-Reports mergen statt ersetzen: geänderte Werte aktualisieren, Rest behalten.
+        val acc = readingAcc.getOrPut(nodeId) { mutableMapOf() }
+        for (r in model.readings) {
+            acc["${r.endpointId}/${r.clusterId}/${r.attributeId}"] = r
+        }
+        if (model.switchable) switchableAcc[nodeId] = true
+        if (model.onOffEndpoint != null) onOffEpAcc[nodeId] = model.onOffEndpoint
+
+        models[nodeId] = MatterDeviceModel(
+            switchable = switchableAcc[nodeId] ?: false,
+            onOffEndpoint = onOffEpAcc[nodeId],
+            readings = acc.values.sortedWith(
+                compareBy({ it.endpointId }, { it.clusterId }, { it.attributeId })
+            )
+        )
         lastUpdate[nodeId] = time
         statuses.remove(nodeId) // gültige Live-Daten -> evtl. alte Fehlermeldung entfernen
         val index = devices.indexOf(nodeId)
