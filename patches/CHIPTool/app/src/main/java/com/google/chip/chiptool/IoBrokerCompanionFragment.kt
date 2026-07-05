@@ -550,7 +550,7 @@ class IoBrokerCompanionFragment : Fragment() {
                             ChipPathId.forWildcard()
                         )
                     ),
-                    1,
+                    0,  // minInterval 0 -> jede Änderung sofort melden (keine 1s-Drossel)
                     30,
                     0
                 )
