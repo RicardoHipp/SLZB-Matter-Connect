@@ -723,6 +723,33 @@ class IoBrokerCompanionFragment : Fragment() {
                                 return
                             }
                             viewLifecycleOwner.lifecycleScope.launch {
+                                // Erst pruefen ob der ioBroker Matter-Adapter ueberhaupt erreichbar/alive ist.
+                                // Wenn nicht: gar nicht senden, direkt den Code zur manuellen Eingabe zeigen.
+                                updateShareProgress(progress, "Prüfe ioBroker-Matter-Verbindung…")
+                                val matterAlive = withContext(Dispatchers.IO) {
+                                    try {
+                                        val u = URL("http://$iobrokerIp:$iobrokerPort/get/system.adapter.matter.$matterInstance.alive")
+                                        val c = u.openConnection() as HttpURLConnection
+                                        c.connectTimeout = 3000
+                                        c.readTimeout = 3000
+                                        if (c.responseCode == 200) {
+                                            val body = c.inputStream.bufferedReader().use { it.readText() }
+                                            body.contains("\"val\":true") || body.trim() == "true"
+                                        } else false
+                                    } catch (e: Exception) { false }
+                                }
+                                if (!matterAlive) {
+                                    activity?.runOnUiThread {
+                                        progress.dialog.dismiss()
+                                        if (isAdded) showManualPairingDialog(
+                                            manualPairingCode,
+                                            testSetupPinCode,
+                                            "Keine Verbindung zum ioBroker Matter-Adapter — der Code wurde NICHT automatisch gesendet."
+                                        )
+                                    }
+                                    return@launch
+                                }
+
                                 updateShareProgress(progress, "Sende Code an ioBroker…")
                                 val sent = withContext(Dispatchers.IO) {
                                     try {
@@ -791,10 +818,11 @@ class IoBrokerCompanionFragment : Fragment() {
         }
     }
 
-    private fun showManualPairingDialog(pairingCode: String, pinCode: Long) {
+    private fun showManualPairingDialog(pairingCode: String, pinCode: Long, reason: String? = null) {
+        val prefix = if (!reason.isNullOrBlank()) "$reason\n\n" else ""
         AlertDialog.Builder(requireContext())
-            .setTitle("Für ioBroker freigegeben")
-            .setMessage("Das Koppelungsfenster ist geöffnet!\n\nKoppelungscode: $pairingCode\nPIN-Code: $pinCode\n\nGehe jetzt in den ioBroker und gib diesen Code manuell ein.")
+            .setTitle("Code manuell in ioBroker eingeben")
+            .setMessage("${prefix}Das Koppelungsfenster am Gerät ist geöffnet.\n\nKoppelungscode: $pairingCode\nPIN-Code: $pinCode\n\nGib diesen Code im ioBroker Matter-Adapter (Controller → Gerät hinzufügen) manuell ein.")
             .setPositiveButton("OK", null)
             .show()
     }
