@@ -67,4 +67,4 @@ beim ersten Mal, mit Cache danach ca. 5–15 Min.
 ## Lizenz
 
 Basiert auf connectedhomeip (Apache License 2.0). Eigene Dateien in diesem Repo
-stehen ebenfalls unter Apache-2.0, siehe `LICENSE`.
+stehen ebenfalls unter Apache-2.0, siehe [LICENSE](LICENSE).
