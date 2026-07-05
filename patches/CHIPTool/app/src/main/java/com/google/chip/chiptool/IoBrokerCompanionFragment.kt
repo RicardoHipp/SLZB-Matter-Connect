@@ -495,6 +495,9 @@ class IoBrokerCompanionFragment : Fragment() {
                 val callback = object : ReportCallback {
                     override fun onReport(nodeState: NodeState?) {
                         if (nodeState == null) return
+                        // Report kann auf dem nativen CHIP-Thread eintreffen, waehrend das Fragment
+                        // abgeloest ist (Theme-Wechsel, Hintergrund, Teardown) -> nichts tun statt Crash.
+                        val act = activity ?: return
 
                         val basicInfo = nodeState.getEndpointState(0)?.getClusterState(40L)
                         val nodeLabel = basicInfo?.getAttributeState(5L)?.value as? String
@@ -505,11 +508,11 @@ class IoBrokerCompanionFragment : Fragment() {
                             else -> null
                         }
                         if (name != null) {
-                            val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+                            val prefs = act.getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
                             prefs.edit().putString("device_name_$nodeId", name).apply()
                             if (prefs.getString("device_custom_name_$nodeId", null) == null) {
-                                requireActivity().runOnUiThread {
-                                    deviceAdapter.updateName(nodeId, name)
+                                act.runOnUiThread {
+                                    if (isAdded) deviceAdapter.updateName(nodeId, name)
                                 }
                             }
                         }
@@ -525,8 +528,8 @@ class IoBrokerCompanionFragment : Fragment() {
                         if (summary == null) return
                         val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.GERMANY).format(java.util.Date())
                         val text = "Update ($time): $summary — Thread-Netzwerk OK"
-                        requireActivity().runOnUiThread {
-                            deviceAdapter.updateStatus(nodeId, text)
+                        act.runOnUiThread {
+                            if (isAdded) deviceAdapter.updateStatus(nodeId, text)
                         }
                     }
 
@@ -536,8 +539,9 @@ class IoBrokerCompanionFragment : Fragment() {
                         ex: java.lang.Exception
                     ) {
                         Log.e("Companion", "Subscribe error for $nodeId", ex)
-                        requireActivity().runOnUiThread {
-                            deviceAdapter.updateStatus(nodeId, "Keine Verbindung zum Gerät")
+                        val act = activity ?: return
+                        act.runOnUiThread {
+                            if (isAdded) deviceAdapter.updateStatus(nodeId, "Keine Verbindung zum Gerät")
                         }
                     }
                 }
