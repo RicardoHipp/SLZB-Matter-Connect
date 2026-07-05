@@ -320,6 +320,31 @@
                         </com.google.android.material.textfield.TextInputLayout>
                     </LinearLayout>
 
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/matterInstanceLayout"
+                        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginBottom="14dp"
+                        android:hint="Matter-Instanz (Standard 0)"
+                        app:boxBackgroundColor="@color/theme_field"
+                        app:boxStrokeColor="@color/theme_accent"
+                        app:boxCornerRadiusTopStart="14dp"
+                        app:boxCornerRadiusTopEnd="14dp"
+                        app:boxCornerRadiusBottomStart="14dp"
+                        app:boxCornerRadiusBottomEnd="14dp"
+                        app:hintTextColor="@color/theme_accent"
+                        android:textColorHint="@color/theme_onv">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/matterInstanceEd"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"
+                            android:textColor="@color/theme_on"
+                            android:textSize="13sp" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/testIobrokerBtn"
                         style="@style/Widget.MaterialComponents.Button"

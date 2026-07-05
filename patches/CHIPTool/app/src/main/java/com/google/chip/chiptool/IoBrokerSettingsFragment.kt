@@ -27,7 +27,8 @@ class IoBrokerSettingsFragment : Fragment() {
     private lateinit var stickPortEd: TextInputEditText
     private lateinit var iobrokerIpEd: TextInputEditText
     private lateinit var iobrokerPortEd: TextInputEditText
-    
+    private lateinit var matterInstanceEd: TextInputEditText
+
     private lateinit var fetchCredentialsBtn: MaterialButton
     private lateinit var testIobrokerBtn: MaterialButton
     private lateinit var settingsDoneButton: MaterialButton
@@ -49,7 +50,8 @@ class IoBrokerSettingsFragment : Fragment() {
         stickPortEd = view.findViewById(R.id.stickPortEd)
         iobrokerIpEd = view.findViewById(R.id.iobrokerIpEd)
         iobrokerPortEd = view.findViewById(R.id.iobrokerPortEd)
-        
+        matterInstanceEd = view.findViewById(R.id.matterInstanceEd)
+
         fetchCredentialsBtn = view.findViewById(R.id.fetchCredentialsBtn)
         testIobrokerBtn = view.findViewById(R.id.testIobrokerBtn)
         settingsDoneButton = view.findViewById(R.id.settingsDoneButton)
@@ -66,6 +68,7 @@ class IoBrokerSettingsFragment : Fragment() {
         stickPortEd.setText(prefs.getString("stick_port", "8080"))
         iobrokerIpEd.setText(prefs.getString("iobroker_ip", ""))
         iobrokerPortEd.setText(prefs.getString("iobroker_port", "8087"))
+        matterInstanceEd.setText(prefs.getString("matter_instance", "0"))
 
         loadThreadConfig()
 
@@ -82,18 +85,19 @@ class IoBrokerSettingsFragment : Fragment() {
         testIobrokerBtn.setOnClickListener {
             val ip = iobrokerIpEd.text.toString().trim()
             val port = iobrokerPortEd.text.toString().trim()
+            val matterInstance = matterInstanceEd.text.toString().trim().ifBlank { "0" }
             if (ip.isBlank() || port.isBlank()) {
                 Toast.makeText(requireContext(), "Bitte IP und Port ausfüllen!", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             
             // Save state immediately
-            prefs.edit().putString("iobroker_ip", ip).putString("iobroker_port", port).apply()
+            prefs.edit().putString("iobroker_ip", ip).putString("iobroker_port", port).putString("matter_instance", matterInstance).apply()
 
             viewLifecycleOwner.lifecycleScope.launch {
                 val success = withContext(Dispatchers.IO) {
                     try {
-                        val url = URL("http://$ip:$port/get/system.adapter.matter.0.alive")
+                        val url = URL("http://$ip:$port/get/system.adapter.matter.$matterInstance.alive")
                         val conn = url.openConnection() as HttpURLConnection
                         conn.connectTimeout = 3000
                         conn.readTimeout = 3000
@@ -122,6 +126,7 @@ class IoBrokerSettingsFragment : Fragment() {
             .putString("stick_port", stickPortEd.text.toString().trim())
             .putString("iobroker_ip", iobrokerIpEd.text.toString().trim())
             .putString("iobroker_port", iobrokerPortEd.text.toString().trim())
+            .putString("matter_instance", matterInstanceEd.text.toString().trim().ifBlank { "0" })
             .apply()
             
         parentFragmentManager.popBackStack()

@@ -227,6 +227,7 @@ class IoBrokerCompanionFragment : Fragment() {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val iobrokerIp = prefs.getString("iobroker_ip", "")
         val iobrokerPort = prefs.getString("iobroker_port", "8087")
+        val matterInstance = prefs.getString("matter_instance", "0") ?: "0"
         val stickIp = prefs.getString("stick_ip", "")
         val stickPort = prefs.getString("stick_port", "8080")
 
@@ -239,7 +240,7 @@ class IoBrokerCompanionFragment : Fragment() {
             val ioJob = async {
                 if (!iobrokerIp.isNullOrBlank()) {
                     try {
-                        val url = URL("http://$iobrokerIp:$iobrokerPort/get/system.adapter.matter.0.alive")
+                        val url = URL("http://$iobrokerIp:$iobrokerPort/get/system.adapter.matter.$matterInstance.alive")
                         val conn = url.openConnection() as HttpURLConnection
                         conn.connectTimeout = 2000
                         conn.readTimeout = 2000
@@ -646,7 +647,7 @@ class IoBrokerCompanionFragment : Fragment() {
         activity?.runOnUiThread { if (isAdded) p.textView.text = text }
     }
 
-    // Pollt javascript.0.matter_pairing_result bis 'success'/'error'/Timeout (max. 2 Min).
+    // Pollt 0_userdata.0.matter_connect.pairing_result bis 'success'/'error'/Timeout (max. 2 Min).
     // Rueckgabe: (status, message) mit status in {"success","error","timeout"}.
     private suspend fun pollPairingResult(ip: String, port: String): Pair<String, String> {
         val deadline = System.currentTimeMillis() + 120_000
@@ -654,7 +655,7 @@ class IoBrokerCompanionFragment : Fragment() {
             kotlinx.coroutines.delay(1500)
             val value = withContext(Dispatchers.IO) {
                 try {
-                    val url = URL("http://$ip:$port/get/javascript.0.matter_pairing_result")
+                    val url = URL("http://$ip:$port/get/0_userdata.0.matter_connect.pairing_result")
                     val conn = url.openConnection() as HttpURLConnection
                     conn.connectTimeout = 3000
                     conn.readTimeout = 3000
@@ -677,6 +678,7 @@ class IoBrokerCompanionFragment : Fragment() {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val iobrokerIp = prefs.getString("iobroker_ip", "") ?: ""
         val iobrokerPort = prefs.getString("iobroker_port", "8087") ?: "8087"
+        val matterInstance = prefs.getString("matter_instance", "0") ?: "0"
 
         if (iobrokerIp.isBlank()) {
             Snackbar.make(requireView(), "ioBroker ist noch nicht eingerichtet", Snackbar.LENGTH_LONG)
@@ -724,12 +726,17 @@ class IoBrokerCompanionFragment : Fragment() {
                                 updateShareProgress(progress, "Sende Code an ioBroker…")
                                 val sent = withContext(Dispatchers.IO) {
                                     try {
+                                        // Matter-Instanz an ioBroker uebergeben (Script liest sie beim Koppeln aus).
+                                        runCatching {
+                                            val ci = URL("http://$iobrokerIp:$iobrokerPort/set/0_userdata.0.matter_connect.instance?value=$matterInstance").openConnection() as HttpURLConnection
+                                            ci.connectTimeout = 4000; ci.readTimeout = 4000; ci.responseCode
+                                        }
                                         // Altes Ergebnis leeren, damit die App keinen Wert der letzten Koppelung liest.
                                         runCatching {
-                                            val c0 = URL("http://$iobrokerIp:$iobrokerPort/set/javascript.0.matter_pairing_result?value=").openConnection() as HttpURLConnection
+                                            val c0 = URL("http://$iobrokerIp:$iobrokerPort/set/0_userdata.0.matter_connect.pairing_result?value=").openConnection() as HttpURLConnection
                                             c0.connectTimeout = 4000; c0.readTimeout = 4000; c0.responseCode
                                         }
-                                        val url = URL("http://$iobrokerIp:$iobrokerPort/set/javascript.0.matter_pairing_code?value=$manualPairingCode")
+                                        val url = URL("http://$iobrokerIp:$iobrokerPort/set/0_userdata.0.matter_connect.pairing_code?value=$manualPairingCode")
                                         val conn = url.openConnection() as HttpURLConnection
                                         conn.connectTimeout = 5000
                                         conn.readTimeout = 5000
