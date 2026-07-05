@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/theme_surface"
+    android:orientation="vertical"
+    android:paddingHorizontal="20dp"
+    android:paddingTop="12dp"
+    android:paddingBottom="24dp">
+
+    <!-- Bottom Sheet Grip -->
+    <View
+        android:layout_width="38dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="16dp"
+        android:background="@color/theme_outline" />
+
+    <!-- Sheet Title -->
+    <TextView
+        android:id="@+id/sheetTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:text="Gerät anlernen"
+        android:textColor="@color/theme_on"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Stepper Dots -->
+    <LinearLayout
+        android:id="@+id/stepperDotsLayout"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:orientation="horizontal"
+        android:layout_marginBottom="16dp">
+
+        <View
+            android:id="@+id/dotStep1"
+            android:layout_width="16dp"
+            android:layout_height="6dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/stepper_dot_active" />
+
+        <View
+            android:id="@+id/dotStep2"
+            android:layout_width="6dp"
+            android:layout_height="6dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/stepper_dot_inactive" />
+
+        <View
+            android:id="@+id/dotStep3"
+            android:layout_width="6dp"
+            android:layout_height="6dp"
+            android:background="@drawable/stepper_dot_inactive" />
+    </LinearLayout>
+
+    <!-- Content Steps Frame -->
+    <FrameLayout
+        android:id="@+id/stepContentContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="280dp">
+
+        <!-- Step 1: Scan Layout -->
+        <LinearLayout
+            android:id="@+id/layoutStepScan"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="visible">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:text="QR-Code auf dem Matter-Gerät scannen"
+                android:textColor="@color/theme_onv"
+                android:textSize="12sp"
+                android:layout_marginBottom="16dp" />
+
+            <!-- Camera Preview Container -->
+            <FrameLayout
+                android:id="@+id/scanbox"
+                android:layout_width="220dp"
+                android:layout_height="220dp"
+                android:layout_gravity="center_horizontal"
+                android:background="@color/theme_field"
+                android:layout_marginBottom="12dp">
+
+                <!-- Native Camera View -->
+                <androidx.camera.view.PreviewView
+                    android:id="@+id/cameraPreviewView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <!-- Corner Overlays (Fake Scanframe) -->
+                <View
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_gravity="top|start"
+                    android:layout_margin="12dp"
+                    android:background="@drawable/scan_corner_tl" />
+
+                <View
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_gravity="top|end"
+                    android:layout_margin="12dp"
+                    android:background="@drawable/scan_corner_tr" />
+
+                <View
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_gravity="bottom|start"
+                    android:layout_margin="12dp"
+                    android:background="@drawable/scan_corner_bl" />
+
+                <View
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_gravity="bottom|end"
+                    android:layout_margin="12dp"
+                    android:background="@drawable/scan_corner_br" />
+
+                <!-- Animated Laser Scan Line -->
+                <View
+                    android:id="@+id/scanline"
+                    android:layout_width="match_parent"
+                    android:layout_height="2dp"
+                    android:layout_marginHorizontal="16dp"
+                    android:background="@color/theme_accent" />
+            </FrameLayout>
+
+            <!-- Manual code entry (optional fallback) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:layout_marginTop="8dp">
+
+                <EditText
+                    android:id="@+id/manualCodeEditText"
+                    android:layout_width="140dp"
+                    android:layout_height="wrap_content"
+                    android:hint="Code tippen"
+                    android:inputType="number"
+                    android:textColor="@color/theme_on"
+                    android:textSize="13sp"/>
+
+                <Button
+                    android:id="@+id/manualCodeBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="OK"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:textColor="@color/theme_accent"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Step 2: Connecting Layout -->
+        <LinearLayout
+            android:id="@+id/layoutStepConnect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:paddingVertical="32dp"
+            android:visibility="gone">
+
+            <ProgressBar
+                android:id="@+id/connectingSpinner"
+                android:layout_width="60dp"
+                android:layout_height="60dp"
+                android:indeterminateTint="@color/theme_accent"
+                android:layout_marginBottom="20dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:text="Verbinde mit Thread-Netzwerk…"
+                android:textColor="@color/theme_onv"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- Step 3: Success Layout -->
+        <LinearLayout
+            android:id="@+id/layoutStepDone"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:paddingVertical="24dp"
+            android:visibility="gone">
+
+            <FrameLayout
+                android:layout_width="74dp"
+                android:layout_height="74dp"
+                android:background="@drawable/success_circle_bg"
+                android:layout_marginBottom="16dp">
+
+                <ImageView
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_check"
+                    app:tint="@color/theme_accent" />
+            </FrameLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:text="Gerät hinzugefügt"
+                android:textColor="@color/theme_on"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView
+                android:id="@+id/commissionedDeviceNameTv"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:text="Gerät ist jetzt verbunden"
+                android:textColor="@color/theme_onv"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Bottom Action Button -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/sheetActionButton"
+        android:layout_width="match_parent"
+        android:layout_height="54dp"
+        android:text="Fertig"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:textColor="#04110e"
+        app:backgroundTint="@color/theme_accent"
+        app:cornerRadius="100dp"
+        android:visibility="gone" />
+</LinearLayout>

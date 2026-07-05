@@ -1,22 +1,26 @@
 package com.google.chip.chiptool
 
 import android.Manifest
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.text.Html
 import android.view.LayoutInflater
-import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.widget.Toolbar
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
@@ -34,16 +38,15 @@ import chip.devicecontroller.model.InvokeElement
 import chip.devicecontroller.model.NodeState
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
-import androidx.appcompat.widget.SwitchCompat
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
-import com.google.android.material.textfield.TextInputEditText
 import com.google.chip.chiptool.util.DeviceIdUtil
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import matter.tlv.AnonymousTag
-import matter.tlv.TlvReader
 import matter.tlv.TlvWriter
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -54,39 +57,33 @@ class IoBrokerCompanionFragment : Fragment() {
     private val deviceController: ChipDeviceController
         get() = ChipClient.getDeviceController(requireContext())
 
-    private lateinit var toolbar: Toolbar
-    private lateinit var threadInfoCard: MaterialCardView
-    private lateinit var threadNameTv: TextView
-    private lateinit var threadChannelTv: TextView
-    private lateinit var threadKeyTv: TextView
+    private lateinit var connectionStatusDot: View
+    private lateinit var connectionStatusTv: TextView
+    private lateinit var themeToggleButton: ImageButton
+    private lateinit var settingsButton: ImageButton
+    
     private lateinit var startCommissioningBtn: MaterialButton
-
-    private lateinit var tabPairingLayout: View
     private lateinit var tabDevicesLayout: RecyclerView
-    private lateinit var tabLayout: TabLayout
 
     private lateinit var deviceAdapter: DeviceAdapter
     private val subscribedNodeIds = mutableSetOf<Long>()
+    private var connectionStatusDotAnimator: ObjectAnimator? = null
+    private var connectionPollJob: kotlinx.coroutines.Job? = null
+    private var lastStatusText: String = ""
 
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grantResults ->
             if (grantResults.values.any { !it }) {
                 AlertDialog.Builder(requireContext())
                     .setTitle("Berechtigungen benötigt")
-                    .setMessage(
-                        "Ohne Bluetooth- und Standort-Berechtigung kann kein neues Gerät angelernt werden."
-                    )
+                    .setMessage("Ohne Bluetooth- und Standort-Berechtigung kann kein neues Gerät angelernt werden.")
                     .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
                     .setCancelable(false)
                     .show()
             }
         }
 
-    // Gespeicherte Thread-Daten
     private var fetchedChannel: Int? = null
-    private var fetchedPanIdHex: String? = null
-    private var fetchedExtPanId: String? = null
-    private var fetchedNetworkKey: String? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -99,16 +96,22 @@ class IoBrokerCompanionFragment : Fragment() {
             permissionRequest.launch(requiredPermissions())
         }
 
-        toolbar = view.findViewById(R.id.toolbar)
-        threadInfoCard = view.findViewById(R.id.threadInfoCard)
-        threadNameTv = view.findViewById(R.id.threadNameTv)
-        threadChannelTv = view.findViewById(R.id.threadChannelTv)
-        threadKeyTv = view.findViewById(R.id.threadKeyTv)
+        // Bind Views
+        connectionStatusDot = view.findViewById(R.id.connectionStatusDot)
+        connectionStatusDot.visibility = View.GONE
+        connectionStatusTv = view.findViewById(R.id.connectionStatusTv)
+        themeToggleButton = view.findViewById(R.id.themeToggleButton)
+        settingsButton = view.findViewById(R.id.settingsButton)
+        
         startCommissioningBtn = view.findViewById(R.id.startCommissioningBtn)
-
-        tabPairingLayout = view.findViewById(R.id.tabPairingLayout)
         tabDevicesLayout = view.findViewById(R.id.tabDevicesLayout)
-        tabLayout = view.findViewById(R.id.tabLayout)
+
+        // Connection Dot Animation (Pulse)
+        connectionStatusDotAnimator = ObjectAnimator.ofFloat(connectionStatusDot, "alpha", 1.0f, 0.2f).apply {
+            duration = 1100
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+        }
 
         // Setup RecyclerView
         tabDevicesLayout.layoutManager = LinearLayoutManager(requireContext())
@@ -121,59 +124,272 @@ class IoBrokerCompanionFragment : Fragment() {
         )
         tabDevicesLayout.adapter = deviceAdapter
 
-        // Settings-Zahnrad in der Toolbar
-        toolbar.inflateMenu(R.menu.iobroker_menu)
-        toolbar.setOnMenuItemClickListener { item: MenuItem ->
-            if (item.itemId == R.id.action_settings) {
-                showSettingsDialog()
-                true
-            } else {
-                false
-            }
+        // Theme Toggle Click
+        themeToggleButton.setOnClickListener { toggleTheme() }
+
+        // Settings Button Click (Slide-In)
+        settingsButton.setOnClickListener {
+            parentFragmentManager.beginTransaction()
+                .setCustomAnimations(
+                    R.anim.slide_in_right,
+                    R.anim.slide_out_left,
+                    R.anim.slide_in_left,
+                    R.anim.slide_out_right
+                )
+                .replace(R.id.nav_host_fragment, IoBrokerSettingsFragment.newInstance(), "SettingsFragment")
+                .addToBackStack(null)
+                .commit()
         }
 
-        // Load cached IP
-        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
-        val savedIp = prefs.getString("stick_ip", "192.168.179.148")
-        val savedStickPort = prefs.getString("stick_port", "8080")
-        val savedIobrokerIp = prefs.getString("iobroker_ip", "")
+        startCommissioningBtn.setOnClickListener { startScanningFlow() }
 
-        startCommissioningBtn.setOnClickListener { startScanning() }
-
-        // Hinweis beim ersten Start bzw. solange ioBroker nicht eingerichtet ist
-        // (per view.post, da die View an dieser Stelle noch nicht im Fenster verankert ist)
-        if (savedIobrokerIp.isNullOrBlank()) {
-            view.post {
-                if (isAdded) {
-                    Snackbar.make(view, "Bitte zuerst Stick- und ioBroker-Verbindung einrichten", Snackbar.LENGTH_INDEFINITE)
-                        .setAction("Einstellungen") { showSettingsDialog() }
-                        .show()
-                }
-            }
-        }
-
-        // Setup Tabs
-        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab?) {
-                if (tab?.position == 0) {
-                    tabPairingLayout.visibility = View.VISIBLE
-                    tabDevicesLayout.visibility = View.GONE
-                } else {
-                    tabPairingLayout.visibility = View.GONE
-                    tabDevicesLayout.visibility = View.VISIBLE
-                    refreshDeviceList()
-                }
-            }
-            override fun onTabUnselected(tab: TabLayout.Tab?) {}
-            override fun onTabReselected(tab: TabLayout.Tab?) {}
-        })
-
-        // Auto-fetch if IP is loaded
-        if (!savedIp.isNullOrBlank()) {
-            fetchThreadCredentials(savedIp, savedStickPort ?: "8080")
-        }
+        // Initial Load settings & fill device list
+        loadSavedConfig()
 
         return view
+    }
+
+    override fun onResume() {
+        super.onResume()
+        loadSavedConfig()
+        
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        val stickIp = prefs.getString("stick_ip", "")
+        val stickPort = prefs.getString("stick_port", "8080")
+        if (!stickIp.isNullOrBlank()) {
+            fetchThreadCredentialsSilently(stickIp ?: "", stickPort ?: "8080")
+        }
+        
+        // Start connection polling loop every 10 seconds with 1s countdown updates
+        connectionPollJob?.cancel()
+        connectionPollJob = viewLifecycleOwner.lifecycleScope.launch {
+            var secondsLeft = 10
+            while (isActive) {
+                if (secondsLeft == 10) {
+                    if (lastStatusText.isNotEmpty()) {
+                        connectionStatusTv.text = Html.fromHtml("$lastStatusText (...)", Html.FROM_HTML_MODE_LEGACY)
+                    }
+                    testConnectionState()
+                    // Immediately re-render with new status and (...) so we don't show a blank gap
+                    if (lastStatusText.isNotEmpty()) {
+                        connectionStatusTv.text = Html.fromHtml("$lastStatusText (...)", Html.FROM_HTML_MODE_LEGACY)
+                    }
+                } else {
+                    if (lastStatusText.isNotEmpty()) {
+                        connectionStatusTv.text = Html.fromHtml("$lastStatusText (in ${secondsLeft}s)", Html.FROM_HTML_MODE_LEGACY)
+                    }
+                }
+                
+                kotlinx.coroutines.delay(1000)
+                secondsLeft--
+                if (secondsLeft < 1) {
+                    secondsLeft = 10
+                }
+            }
+        }
+        
+        // Aktualisiert die Liste falls wir gerade vom Anlernen zurückkommen
+        refreshDeviceList()
+    }
+
+    override fun onPause() {
+        connectionPollJob?.cancel()
+        super.onPause()
+    }
+
+    override fun onDestroyView() {
+        connectionStatusDotAnimator?.cancel()
+        super.onDestroyView()
+    }
+
+    private fun loadSavedConfig() {
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        val channel = prefs.getInt("fetched_channel", -1)
+        if (channel != -1) {
+            fetchedChannel = channel
+        } else {
+            fetchedChannel = null
+        }
+    }
+
+    private fun getExceptionMessage(e: Exception): String {
+        val msg = e.message ?: ""
+        return when {
+            e is java.net.SocketTimeoutException -> "Timeout"
+            e is java.net.ConnectException || msg.contains("Connection refused") -> "Verbindung verweigert"
+            msg.contains("ENETUNREACH") -> "Netzwerk nicht erreichbar"
+            msg.contains("EHOSTUNREACH") -> "Host nicht erreichbar"
+            else -> e.javaClass.simpleName
+        }
+    }
+
+    private suspend fun testConnectionState() {
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        val iobrokerIp = prefs.getString("iobroker_ip", "")
+        val iobrokerPort = prefs.getString("iobroker_port", "8087")
+        val stickIp = prefs.getString("stick_ip", "")
+        val stickPort = prefs.getString("stick_port", "8080")
+
+        if (iobrokerIp.isNullOrBlank() && stickIp.isNullOrBlank()) {
+            setConnectionState(false, false, "Nicht eingerichtet")
+            return
+        }
+
+        val (ioResult, stickResult) = withContext(Dispatchers.IO) {
+            val ioJob = async {
+                if (!iobrokerIp.isNullOrBlank()) {
+                    try {
+                        val url = URL("http://$iobrokerIp:$iobrokerPort/get/system.adapter.matter.0.alive")
+                        val conn = url.openConnection() as HttpURLConnection
+                        conn.connectTimeout = 2000
+                        conn.readTimeout = 2000
+                        if (conn.responseCode == 200) {
+                            val body = conn.inputStream.bufferedReader().use { it.readText() }
+                            val alive = body.contains("\"val\":true") || body.trim() == "true"
+                            if (alive) {
+                                Pair(true, null)
+                            } else {
+                                Pair(false, "Adapter aus")
+                            }
+                        } else {
+                            Pair(false, "HTTP ${conn.responseCode}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("Companion", "ioBroker check failed", e)
+                        Pair(false, getExceptionMessage(e))
+                    }
+                } else {
+                    Pair(false, "nicht konfiguriert")
+                }
+            }
+            val stickJob = async {
+                if (!stickIp.isNullOrBlank()) {
+                    try {
+                        val process = Runtime.getRuntime().exec("ping -c 1 -w 2 $stickIp")
+                        val exitCode = process.waitFor()
+                        if (exitCode == 0) {
+                            Pair(true, null)
+                        } else {
+                            Pair(false, "Kein Ping")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("Companion", "Stick ping failed", e)
+                        Pair(false, getExceptionMessage(e))
+                    }
+                } else {
+                    Pair(false, "nicht konfiguriert")
+                }
+            }
+            Pair(ioJob.await(), stickJob.await())
+        }
+
+        if (isAdded) {
+            val iobrokerSuccess = ioResult.first
+            val iobrokerErr = ioResult.second
+            val stickSuccess = stickResult.first
+            val stickErr = stickResult.second
+
+            val greenDot = "<font color='#12897A'>●</font>"
+            val redDot = "<font color='#D63A3E'>●</font>"
+
+            val ioSymbol = if (iobrokerSuccess) greenDot else redDot
+            val stickSymbol = if (stickSuccess) greenDot else redDot
+
+            val ioText = "ioBroker-Matter: $ioSymbol"
+            val stickText = "SLZB-Ping: $stickSymbol"
+            val text = "$ioText · $stickText"
+            setConnectionState(iobrokerSuccess, stickSuccess, text)
+        }
+    }
+
+    private fun setConnectionState(iobrokerSuccess: Boolean, stickSuccess: Boolean, text: String) {
+        lastStatusText = text
+        if (connectionStatusTv.text.isNullOrBlank()) {
+            connectionStatusTv.text = Html.fromHtml(text, Html.FROM_HTML_MODE_LEGACY)
+        }
+        if (iobrokerSuccess && stickSuccess) {
+            connectionStatusDot.setBackgroundResource(R.drawable.circle_dot_accent)
+            connectionStatusDotAnimator?.start()
+        } else if (iobrokerSuccess || stickSuccess) {
+            connectionStatusDot.setBackgroundResource(R.drawable.circle_dot_warning)
+            connectionStatusDotAnimator?.start()
+        } else {
+            connectionStatusDotAnimator?.cancel()
+            connectionStatusDot.setBackgroundResource(R.drawable.circle_dot_gray)
+            connectionStatusDot.alpha = 1.0f
+        }
+    }
+
+    private fun clearThreadCredentials() {
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .remove("device_custom_name_stick")
+            .remove("fetched_channel")
+            .remove("fetched_pan_id")
+            .remove("fetched_ext_pan_id")
+            .remove("fetched_network_key")
+            .apply()
+        loadSavedConfig()
+    }
+
+    private fun fetchThreadCredentialsSilently(ip: String, port: String) {
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val url = URL("http://$ip:$port/node/dataset/active")
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = 4000
+                    conn.readTimeout = 4000
+                    if (conn.responseCode == 200) {
+                        conn.inputStream.bufferedReader().use { it.readText() }
+                    } else { null }
+                } catch (e: Exception) {
+                    Log.e("Companion", "Silent credentials fetch failed", e)
+                    null
+                }
+            }
+
+            if (result != null) {
+                try {
+                    val json = JSONObject(result)
+                    val name = json.optString("NetworkName", "OpenThread-Stick")
+                    val channel = json.optInt("Channel", 15)
+                    val panIdDec = json.optInt("PanId", 4660)
+                    val panIdHex = panIdDec.toString(16)
+                    val extPanId = json.optString("ExtPanId", "")
+                    val networkKey = json.optString("NetworkKey", "")
+
+                    prefs.edit()
+                        .putString("device_custom_name_stick", name)
+                        .putInt("fetched_channel", channel)
+                        .putString("fetched_pan_id", panIdHex)
+                        .putString("fetched_ext_pan_id", extPanId)
+                        .putString("fetched_network_key", networkKey)
+                        .apply()
+
+                    loadSavedConfig()
+                } catch (e: Exception) {
+                    Log.e("Companion", "Failed to parse silently fetched credentials", e)
+                    clearThreadCredentials()
+                }
+            } else {
+                clearThreadCredentials()
+            }
+        }
+    }
+
+    private fun toggleTheme() {
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        val currentMode = AppCompatDelegate.getDefaultNightMode()
+        val newMode = if (currentMode == AppCompatDelegate.MODE_NIGHT_YES) {
+            AppCompatDelegate.MODE_NIGHT_NO
+        } else {
+            AppCompatDelegate.MODE_NIGHT_YES
+        }
+        prefs.edit().putInt("theme_mode", newMode).apply()
+        AppCompatDelegate.setDefaultNightMode(newMode)
     }
 
     private fun requiredPermissions(): Array<String> {
@@ -195,136 +411,10 @@ class IoBrokerCompanionFragment : Fragment() {
         }
     }
 
-    private fun showSettingsDialog() {
-        val dialogView = LayoutInflater.from(requireContext())
-            .inflate(R.layout.dialog_iobroker_settings, null)
-
-        val stickIpEd: TextInputEditText = dialogView.findViewById(R.id.stickIpEd)
-        val stickPortEd: TextInputEditText = dialogView.findViewById(R.id.stickPortEd)
-        val fetchCredentialsBtn: MaterialButton = dialogView.findViewById(R.id.fetchCredentialsBtn)
-        val iobrokerIpEd: TextInputEditText = dialogView.findViewById(R.id.iobrokerIpEd)
-        val iobrokerPortEd: TextInputEditText = dialogView.findViewById(R.id.iobrokerPortEd)
-        val testIobrokerBtn: MaterialButton = dialogView.findViewById(R.id.testIobrokerBtn)
-
-        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
-        stickIpEd.setText(prefs.getString("stick_ip", "192.168.179.148"))
-        stickPortEd.setText(prefs.getString("stick_port", "8080"))
-        iobrokerIpEd.setText(prefs.getString("iobroker_ip", ""))
-        iobrokerPortEd.setText(prefs.getString("iobroker_port", "8087"))
-
-        fetchCredentialsBtn.setOnClickListener {
-            val ip = stickIpEd.text.toString().trim()
-            val port = stickPortEd.text.toString().trim()
-            if (ip.isBlank() || port.isBlank()) {
-                Toast.makeText(requireContext(), "Bitte IP-Adresse und Port eingeben", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            fetchThreadCredentials(ip, port)
-        }
-
-        testIobrokerBtn.setOnClickListener {
-            val ip = iobrokerIpEd.text.toString().trim()
-            val port = iobrokerPortEd.text.toString().trim()
-            if (ip.isBlank() || port.isBlank()) {
-                Toast.makeText(requireContext(), "Bitte IP und Port ausfüllen!", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            prefs.edit().putString("iobroker_ip", ip).putString("iobroker_port", port).apply()
-
-            viewLifecycleOwner.lifecycleScope.launch {
-                val success = withContext(Dispatchers.IO) {
-                    try {
-                        val url = URL("http://$ip:$port/get/system.adapter.matter.0.alive")
-                        val conn = url.openConnection() as HttpURLConnection
-                        conn.connectTimeout = 3000
-                        conn.readTimeout = 3000
-                        conn.responseCode == 200
-                    } catch (e: Exception) {
-                        false
-                    }
-                }
-                if (success) {
-                    Toast.makeText(requireContext(), "Verbindung erfolgreich! Matter-Adapter läuft.", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(requireContext(), "Verbindung fehlgeschlagen! IP/Port prüfen.", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-
-        AlertDialog.Builder(requireContext())
-            .setTitle("Verbindungseinstellungen")
-            .setView(dialogView)
-            .setPositiveButton("Fertig", null)
-            .show()
-    }
-
-    private fun fetchThreadCredentials(ip: String, port: String) {
-        // Cache IP + Port
-        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("stick_ip", ip).putString("stick_port", port).apply()
-
-        viewLifecycleOwner.lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                try {
-                    val url = URL("http://$ip:$port/node/dataset/active")
-                    val conn = url.openConnection() as HttpURLConnection
-                    conn.requestMethod = "GET"
-                    conn.connectTimeout = 4000
-                    conn.readTimeout = 4000
-                    if (conn.responseCode == 200) {
-                        conn.inputStream.bufferedReader().use { it.readText() }
-                    } else {
-                        null
-                    }
-                } catch (e: Exception) {
-                    Log.e("Companion", "Fetch error", e)
-                    null
-                }
-            }
-
-            if (result != null) {
-                try {
-                    val json = JSONObject(result)
-                    val name = json.optString("NetworkName", "Unbekannt")
-                    val channel = json.optInt("Channel", 15)
-                    val panIdDec = json.optInt("PanId", 4660)
-                    val panIdHex = panIdDec.toString(16)
-                    val extPanId = json.optString("ExtPanId", "")
-                    val networkKey = json.optString("NetworkKey", "")
-
-                    // Save in variables
-                    fetchedChannel = channel
-                    fetchedPanIdHex = panIdHex
-                    fetchedExtPanId = extPanId
-                    fetchedNetworkKey = networkKey
-
-                    // Cache in app preferences for Scanner activity
-                    prefs.edit()
-                        .putInt("fetched_channel", channel)
-                        .putString("fetched_pan_id", panIdHex)
-                        .putString("fetched_ext_pan_id", extPanId)
-                        .putString("fetched_network_key", networkKey)
-                        .apply()
-
-                    threadNameTv.text = "Netzwerkname: $name"
-                    threadChannelTv.text = "Kanal: $channel (PAN ID: $panIdHex)"
-                    threadKeyTv.text = "Key: $networkKey"
-                    threadInfoCard.visibility = View.VISIBLE
-
-                    Toast.makeText(requireContext(), "Stick-Daten geladen!", Toast.LENGTH_SHORT).show()
-                } catch (e: Exception) {
-                    Toast.makeText(requireContext(), "Fehler beim Parsen der Daten", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                Toast.makeText(requireContext(), "Verbindung fehlgeschlagen (IP/Port prüfen)", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun startScanning() {
+    private fun startScanningFlow() {
         if (fetchedChannel == null) {
             Snackbar.make(requireView(), "Bitte zuerst Stick-Daten in den Einstellungen abrufen!", Snackbar.LENGTH_LONG)
-                .setAction("Einstellungen") { showSettingsDialog() }
+                .setAction("Einstellungen") { settingsButton.performClick() }
                 .show()
             return
         }
@@ -334,30 +424,19 @@ class IoBrokerCompanionFragment : Fragment() {
                 .show()
             return
         }
-        val activity = requireActivity() as CHIPToolActivity
-        activity.setNetworkType(com.google.chip.chiptool.provisioning.ProvisionNetworkType.THREAD)
-
-        activity.supportFragmentManager
-            .beginTransaction()
-            .replace(R.id.nav_host_fragment, com.google.chip.chiptool.setuppayloadscanner.BarcodeFragment.newInstance(), "BarcodeFragment")
-            .addToBackStack(null)
-            .commit()
+        
+        // Startet das neue Bottom Sheet zum Anlernen
+        val sheet = CommissioningSheetFragment.newInstance()
+        sheet.show(parentFragmentManager, "CommissioningSheet")
     }
 
-    private fun refreshDeviceList() {
+    fun refreshDeviceList() {
         val nodeList = DeviceIdUtil.getCommissionedNodeId(requireContext())
         val nodeIds = nodeList.mapNotNull {
-            try {
-                it.toLong(16)
-            } catch (e: Exception) {
-                null
-            }
+            try { it.toLong(16) } catch (e: Exception) { null }
         }
         deviceAdapter.updateDevices(nodeIds)
 
-        // Gespeicherte Namen und Pairing-Codes sofort anzeigen
-        // (auch wenn das Gerät gerade schläft/offline ist).
-        // Eigener Name (custom) hat Vorrang vor dem vom Geraet gemeldeten.
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         nodeIds.forEach { nodeId ->
             val name = prefs.getString("device_custom_name_$nodeId", null)
@@ -366,17 +445,10 @@ class IoBrokerCompanionFragment : Fragment() {
             prefs.getString("device_code_$nodeId", null)?.let { code ->
                 deviceAdapter.updateCode(nodeId, code)
             }
+            subscribeToDeviceUpdates(nodeId)
         }
-
-        nodeIds.forEach { nodeId -> subscribeToDeviceUpdates(nodeId) }
     }
 
-    // Abonniert ALLE Endpoints/Cluster/Attribute des Geräts (Wildcard) statt eines
-    // fest einprogrammierten Clusters. Funktioniert dadurch generisch für jeden
-    // Thread/Matter-Gerätetyp (Taster, Sensoren, Steckdosen, ...), nicht nur Switches,
-    // und dient gleichzeitig als einfacher Live-Test, ob das Thread-Netzwerk steht.
-    // Eigener Name pro Geraet (hat Vorrang vor dem vom Geraet gemeldeten Produktnamen),
-    // damit mehrere gleiche Geraete unterscheidbar bleiben. Nur lokal in der App.
     private fun showRenameDialog(nodeId: Long) {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val currentName = prefs.getString("device_custom_name_$nodeId", null)
@@ -413,6 +485,8 @@ class IoBrokerCompanionFragment : Fragment() {
         subscribedNodeIds.add(nodeId)
 
         viewLifecycleOwner.lifecycleScope.launch {
+            kotlinx.coroutines.delay(2000)
+            if (!isActive) return@launch
             try {
                 val device = withContext(Dispatchers.IO) {
                     ChipClient.getConnectedDevicePointer(requireContext(), nodeId)
@@ -422,8 +496,6 @@ class IoBrokerCompanionFragment : Fragment() {
                     override fun onReport(nodeState: NodeState?) {
                         if (nodeState == null) return
 
-                        // Geraetename aus Basic Information (EP0/Cluster 40) ziehen:
-                        // NodeLabel (Attr 5, vom Nutzer vergeben) bevorzugt, sonst ProductName (Attr 3)
                         val basicInfo = nodeState.getEndpointState(0)?.getClusterState(40L)
                         val nodeLabel = basicInfo?.getAttributeState(5L)?.value as? String
                         val productName = basicInfo?.getAttributeState(3L)?.value as? String
@@ -433,10 +505,8 @@ class IoBrokerCompanionFragment : Fragment() {
                             else -> null
                         }
                         if (name != null) {
-                            val prefs = requireActivity()
-                                .getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+                            val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
                             prefs.edit().putString("device_name_$nodeId", name).apply()
-                            // Nur anzeigen, wenn der Nutzer keinen eigenen Namen vergeben hat
                             if (prefs.getString("device_custom_name_$nodeId", null) == null) {
                                 requireActivity().runOnUiThread {
                                     deviceAdapter.updateName(nodeId, name)
@@ -453,8 +523,7 @@ class IoBrokerCompanionFragment : Fragment() {
                             }
                         }
                         if (summary == null) return
-                        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.GERMANY)
-                            .format(java.util.Date())
+                        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.GERMANY).format(java.util.Date())
                         val text = "Update ($time): $summary — Thread-Netzwerk OK"
                         requireActivity().runOnUiThread {
                             deviceAdapter.updateStatus(nodeId, text)
@@ -464,7 +533,7 @@ class IoBrokerCompanionFragment : Fragment() {
                     override fun onError(
                         attributePath: ChipAttributePath?,
                         eventPath: ChipEventPath?,
-                        ex: Exception
+                        ex: java.lang.Exception
                     ) {
                         Log.e("Companion", "Subscribe error for $nodeId", ex)
                         requireActivity().runOnUiThread {
@@ -505,16 +574,10 @@ class IoBrokerCompanionFragment : Fragment() {
                 tlvWriter.startStructure(AnonymousTag)
                 tlvWriter.endStructure()
                 val commandId = if (turnOn) 1L else 0L
-                val invokeElement = InvokeElement.newInstance(
-                    1,
-                    6L,
-                    commandId,
-                    tlvWriter.getEncoded(),
-                    null
-                )
+                val invokeElement = InvokeElement.newInstance(1, 6L, commandId, tlvWriter.getEncoded(), null)
                 deviceController.invoke(
                     object : InvokeCallback {
-                        override fun onError(ex: Exception?) {
+                        override fun onError(ex: java.lang.Exception?) {
                             Log.e("Companion", "Switch cmd failed", ex)
                         }
                         override fun onResponse(invokeElement: InvokeElement?, successCode: Long) {
@@ -532,19 +595,14 @@ class IoBrokerCompanionFragment : Fragment() {
         }
     }
 
-    // 12-bit discriminator, 0 ausgeschlossen (reserviert)
     private fun generateRandomDiscriminator(): Int = (1..4095).random()
-
-    // Matter-Spec: gueltiger Bereich 1..99999998, bestimmte Trivial-Codes verboten
     private fun generateRandomSetupPinCode(): Long {
         val invalidCodes = setOf(
             11111111L, 22222222L, 33333333L, 44444444L, 55555555L,
             66666666L, 77777777L, 88888888L, 99999999L, 12345678L, 87654321L
         )
         var pin: Long
-        do {
-            pin = (1..99999998).random().toLong()
-        } while (pin in invalidCodes)
+        do { pin = (1..99999998).random().toLong() } while (pin in invalidCodes)
         return pin
     }
 
@@ -555,8 +613,9 @@ class IoBrokerCompanionFragment : Fragment() {
 
         if (iobrokerIp.isBlank()) {
             Snackbar.make(requireView(), "ioBroker ist noch nicht eingerichtet", Snackbar.LENGTH_LONG)
-                .setAction("Einstellungen") { showSettingsDialog() }
+                .setAction("Einstellungen") { settingsButton.performClick() }
                 .show()
+            return
         }
 
         viewLifecycleOwner.lifecycleScope.launch {
@@ -581,7 +640,7 @@ class IoBrokerCompanionFragment : Fragment() {
                             }
                         }
                         override fun onSuccess(deviceId: Long, manualPairingCode: String?, qrCode: String?) {
-                            if (!iobrokerIp.isBlank() && !iobrokerPort.isBlank() && manualPairingCode != null) {
+                            if (manualPairingCode != null) {
                                 viewLifecycleOwner.lifecycleScope.launch {
                                     val apiResult = withContext(Dispatchers.IO) {
                                         try {
@@ -591,13 +650,8 @@ class IoBrokerCompanionFragment : Fragment() {
                                             conn.readTimeout = 5000
                                             if (conn.responseCode == 200) {
                                                 conn.inputStream.bufferedReader().use { it.readText() }
-                                            } else {
-                                                null
-                                            }
-                                        } catch (e: Exception) {
-                                            Log.e("Companion", "API transmission failed", e)
-                                            null
-                                        }
+                                            } else { null }
+                                        } catch (e: Exception) { null }
                                     }
 
                                     requireActivity().runOnUiThread {
@@ -641,16 +695,10 @@ class IoBrokerCompanionFragment : Fragment() {
             .setMessage("Möchtest du das Gerät (Node ID: $nodeId) wirklich aus der App löschen?")
             .setPositiveButton("Ja") { _, _ ->
                 deviceController.unpairDeviceCallback(nodeId, object : UnpairDeviceCallback {
-                    override fun onError(status: Int, remoteDeviceId: Long) {
-                        Log.e("Companion", "Unpair failed: $status")
-                    }
-                    override fun onSuccess(remoteDeviceId: Long) {
-                        Log.i("Companion", "Unpair success")
-                    }
+                    override fun onError(status: Int, remoteDeviceId: Long) { Log.e("Companion", "Unpair failed: $status") }
+                    override fun onSuccess(remoteDeviceId: Long) { Log.i("Companion", "Unpair success") }
                 })
                 DeviceIdUtil.removeCommissionedNodeId(requireContext(), nodeId)
-                // Gespeicherte Metadaten (Name, Pairing-Code, PIN) mit aufraeumen,
-                // damit der Duplikat-Check ein Neu-Anlernen wieder zulaesst
                 requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
                     .edit()
                     .remove("device_name_$nodeId")
@@ -680,9 +728,12 @@ class DeviceAdapter(
     private val statuses = mutableMapOf<Long, String>()
     private val names = mutableMapOf<Long, String>()
     private val codes = mutableMapOf<Long, String>()
+    private val expandedStates = mutableMapOf<Long, Boolean>()
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val editBtn: View = view.findViewById(R.id.editDeviceBtn)
         val nameTv: TextView = view.findViewById(R.id.deviceNameTv)
+        val idChip: TextView = view.findViewById(R.id.deviceIdChip)
         val codeTv: TextView = view.findViewById(R.id.deviceCodeTv)
         val statusTv: TextView = view.findViewById(R.id.deviceStatusTv)
         val toggleSwitch: SwitchCompat = view.findViewById(R.id.deviceToggleSwitch)
@@ -698,8 +749,9 @@ class DeviceAdapter(
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val nodeId = devices[position]
         val name = names[nodeId]
-        holder.nameTv.text = if (!name.isNullOrBlank()) "$name (ID: $nodeId)" else "Gerät (Node ID: $nodeId)"
-        holder.nameTv.setOnClickListener { onRename(nodeId) }
+        holder.nameTv.text = name ?: "Gerät"
+        holder.idChip.text = "ID $nodeId"
+        holder.editBtn.setOnClickListener { onRename(nodeId) }
         val code = codes[nodeId]
         if (code != null) {
             holder.codeTv.text = "Pairing-Code: $code"
@@ -707,7 +759,32 @@ class DeviceAdapter(
         } else {
             holder.codeTv.visibility = View.GONE
         }
-        holder.statusTv.text = statuses[nodeId] ?: "Noch keine Live-Daten"
+
+        val fullStatus = statuses[nodeId] ?: "Noch keine Live-Daten"
+        if (fullStatus.startsWith("Update (") && fullStatus.contains("):")) {
+            val closeParenIdx = fullStatus.indexOf("):")
+            val timestamp = fullStatus.substring(0, closeParenIdx + 1)
+            val details = fullStatus.substring(closeParenIdx + 2).trim()
+
+            val isExpanded = expandedStates[nodeId] ?: false
+            if (isExpanded) {
+                holder.statusTv.text = "$timestamp Details ▴\n$details"
+                holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(holder.itemView.context, R.color.theme_on))
+            } else {
+                holder.statusTv.text = "$timestamp Details ▾"
+                holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(holder.itemView.context, R.color.theme_accent))
+            }
+
+            holder.statusTv.setOnClickListener {
+                expandedStates[nodeId] = !isExpanded
+                notifyItemChanged(position)
+            }
+        } else {
+            holder.statusTv.text = fullStatus
+            holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(holder.itemView.context, R.color.theme_onv))
+            holder.statusTv.setOnClickListener(null)
+            holder.statusTv.isClickable = false
+        }
 
         holder.toggleSwitch.setOnCheckedChangeListener(null)
         holder.toggleSwitch.isChecked = false

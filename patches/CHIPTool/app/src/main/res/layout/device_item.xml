@@ -1,69 +1,113 @@
 <?xml version="1.0" encoding="utf-8"?>
 <com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    style="@style/CustomCardViewStyle"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="12dp"
-    app:cardCornerRadius="12dp"
-    app:strokeWidth="1dp"
-    app:strokeColor="#2E2E3E"
-    app:cardBackgroundColor="#1E1E2C">
+    app:cardCornerRadius="24dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:padding="20dp">
 
-        <RelativeLayout
+        <!-- Header Container with Name, ID, Edit Icon and Switch -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
             android:layout_marginBottom="12dp">
 
-            <!-- Test-Switch (An/Aus) -->
+            <!-- Device Name, ID Chip & Edit Icon Container -->
+            <LinearLayout
+                android:id="@+id/nameContainer"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/deviceNameTv"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Gerät"
+                    android:textColor="@color/theme_on"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <!-- ID-Chip next to name -->
+                <TextView
+                    android:id="@+id/deviceIdChip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/id_chip_bg"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="2dp"
+                    android:text="ID -"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/theme_onv"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:singleLine="true"
+                    android:maxLines="1" />
+
+                <ImageView
+                    android:id="@+id/editDeviceBtn"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="2dp"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_edit"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Umbenennen"
+                    app:tint="@color/theme_onv" />
+            </LinearLayout>
+
+            <!-- Test-Switch (An/Aus) aligned horizontally -->
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/deviceToggleSwitch"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_alignParentEnd="true"
-                android:layout_centerVertical="true"/>
+                app:thumbTint="@color/theme_accent"
+                app:trackTint="@color/theme_outline" />
+        </LinearLayout>
 
-            <TextView
-                android:id="@+id/deviceNameTv"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Gerät (Node ID: 2)"
-                android:textColor="#FFFFFF"
-                android:textSize="18sp"
-                android:textStyle="bold"
-                android:drawableEnd="@android:drawable/ic_menu_edit"
-                android:drawablePadding="8dp"
-                android:layout_alignParentStart="true"
-                android:layout_toStartOf="@id/deviceToggleSwitch"
-                android:layout_marginEnd="8dp"
-                android:maxLines="2"
-                android:ellipsize="end"
-                android:layout_centerVertical="true"/>
-        </RelativeLayout>
-
+        <!-- Pairing-Code -->
         <TextView
             android:id="@+id/deviceCodeTv"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text=""
             android:visibility="gone"
-            android:textColor="#7A9CC6"
-            android:textSize="13sp"
-            android:layout_marginBottom="4dp"/>
+            android:fontFamily="monospace"
+            android:textColor="@color/theme_accent"
+            android:textSize="12sp"
+            android:layout_marginBottom="6dp"/>
 
+        <!-- Live-Status (Klickbar für Details) -->
         <TextView
             android:id="@+id/deviceStatusTv"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Noch keine Live-Daten"
-            android:textColor="#A0A0A0"
-            android:textSize="13sp"
-            android:layout_marginBottom="8dp"/>
+            android:textColor="@color/theme_onv"
+            android:textSize="12sp"
+            android:paddingVertical="6dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?attr/selectableItemBackground"
+            android:layout_marginBottom="12dp"/>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -76,25 +120,30 @@
                 android:id="@+id/shareDeviceBtn"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="44dp"
                 android:layout_weight="1"
                 android:layout_marginEnd="6dp"
                 android:text="Freigeben"
-                android:textColor="#2196F3"
-                app:strokeColor="#2196F3"
-                app:cornerRadius="6dp"/>
+                android:textColor="@color/theme_accent"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                app:strokeColor="@color/theme_accent"
+                app:cornerRadius="100dp"/>
 
             <!-- Button: Entkoppeln (Löschen) -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/unpairDeviceBtn"
                 style="@style/Widget.MaterialComponents.Button.TextButton"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="44dp"
                 android:layout_weight="1"
                 android:layout_marginStart="6dp"
                 android:text="Entkoppeln"
-                android:textColor="#F44336"
-                app:cornerRadius="6dp"/>
+                android:textColor="@color/theme_danger"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                app:cornerRadius="100dp"
+                android:background="?attr/selectableItemBackground"/>
         </LinearLayout>
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

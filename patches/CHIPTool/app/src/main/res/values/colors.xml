@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Teal Theme Light Colors -->
+    <color name="theme_bg">#EEF3F2</color>
+    <color name="theme_surface">#FFFFFF</color>
+    <color name="theme_surface2">#E6EDEC</color>
+    <color name="theme_field">#F7FAF9</color>
+    <color name="theme_on">#12211E</color>
+    <color name="theme_onv">#4E5D59</color>
+    <color name="theme_outline">#D3DFDC</color>
+    <color name="theme_accent">#12897A</color>
+    <color name="theme_danger">#D63A3E</color>
+
+    <!-- Legacy / Material Defaults -->
+    <color name="colorPrimary">#12897A</color>
+    <color name="colorPrimaryDark">#0E6E61</color>
+    <color name="colorAccent">#12897A</color>
+</resources>
