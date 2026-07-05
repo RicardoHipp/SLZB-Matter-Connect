@@ -249,6 +249,15 @@
                         android:textColor="@color/theme_on"
                         android:textSize="13sp"
                         android:textStyle="bold"
+                        android:layout_marginBottom="4dp"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="IP vom ioBroker-Server · Port vom Adapter „Einfache RESTful API“ (simple-api, Standard 8087) – nicht der ioBroker-Port selbst"
+                        android:textColor="@color/theme_onv"
+                        android:textSize="11sp"
+                        android:lineSpacingMultiplier="1.1"
                         android:layout_marginBottom="14dp"/>
 
                     <!-- IP and Port in horizontal row -->
@@ -291,7 +300,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:hint="Port"
+                            android:hint="API-Port"
                             app:boxBackgroundColor="@color/theme_field"
                             app:boxStrokeColor="@color/theme_accent"
                             app:boxCornerRadiusTopStart="14dp"
