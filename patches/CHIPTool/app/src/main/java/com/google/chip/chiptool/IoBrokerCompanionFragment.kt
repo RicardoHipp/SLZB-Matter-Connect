@@ -862,6 +862,7 @@ class DeviceAdapter(
     private val readingAcc = mutableMapOf<Long, MutableMap<String, MatterReading>>()
     private val switchableAcc = mutableMapOf<Long, Boolean>()
     private val onOffEpAcc = mutableMapOf<Long, Int>()
+    private val changedKeys = mutableMapOf<Long, Set<String>>() // zuletzt geänderte Werte je Gerät
     private val names = mutableMapOf<Long, String>()
     private val codes = mutableMapOf<Long, String>()
     private val expandedStates = mutableMapOf<Long, Boolean>()
@@ -901,16 +902,31 @@ class DeviceAdapter(
         val errorStatus = statuses[nodeId]
         when {
             model != null -> {
-                val header = "Aktualisiert ${lastUpdate[nodeId] ?: ""} · ${model.readings.size} Werte"
+                val changed = changedKeys[nodeId] ?: emptySet()
                 val isExpanded = expandedStates[nodeId] ?: false
-                if (isExpanded) {
-                    val body = model.readings.joinToString("\n") { "${it.label} = ${it.value}" }
-                    holder.statusTv.text = "$header ▴\n$body"
-                    holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_on))
-                } else {
-                    holder.statusTv.text = "$header ▾"
-                    holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_accent))
+                val header = "Aktualisiert ${lastUpdate[nodeId] ?: ""} · ${model.readings.size} Werte ${if (isExpanded) "▴" else "▾"}"
+                val onColor = androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_on)
+                val hiColor = androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_accent)
+                val subColor = androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_onv)
+
+                val sb = android.text.SpannableStringBuilder()
+                val hStart = sb.length
+                sb.append(header)
+                sb.setSpan(android.text.style.ForegroundColorSpan(subColor), hStart, sb.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+                // Zugeklappt nur die zuletzt geänderten Werte zeigen, aufgeklappt alle.
+                val lines = if (isExpanded) model.readings else model.readings.filter {
+                    "${it.endpointId}/${it.clusterId}/${it.attributeId}" in changed
                 }
+                for (r in lines) {
+                    val key = "${r.endpointId}/${r.clusterId}/${r.attributeId}"
+                    sb.append("\n")
+                    val start = sb.length
+                    sb.append("${r.label} = ${r.value}")
+                    val color = if (key in changed) hiColor else onColor
+                    sb.setSpan(android.text.style.ForegroundColorSpan(color), start, sb.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                holder.statusTv.text = sb
                 holder.statusTv.isClickable = true
                 holder.statusTv.setOnClickListener {
                     expandedStates[nodeId] = !isExpanded
@@ -962,9 +978,16 @@ class DeviceAdapter(
     fun updateModel(nodeId: Long, model: MatterDeviceModel, time: String) {
         // Delta-Reports mergen statt ersetzen: geänderte Werte aktualisieren, Rest behalten.
         val acc = readingAcc.getOrPut(nodeId) { mutableMapOf() }
+        val changed = mutableSetOf<String>()
         for (r in model.readings) {
-            acc["${r.endpointId}/${r.clusterId}/${r.attributeId}"] = r
+            val key = "${r.endpointId}/${r.clusterId}/${r.attributeId}"
+            val old = acc[key]
+            // Nur echte Änderungen eines bereits bekannten Werts markieren
+            // (Priming/neue Werte -> nicht hervorheben).
+            if (old != null && old.value != r.value) changed.add(key)
+            acc[key] = r
         }
+        changedKeys[nodeId] = changed
         if (model.switchable) switchableAcc[nodeId] = true
         if (model.onOffEndpoint != null) onOffEpAcc[nodeId] = model.onOffEndpoint
 
