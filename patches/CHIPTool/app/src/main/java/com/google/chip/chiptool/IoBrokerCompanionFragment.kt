@@ -914,17 +914,37 @@ class DeviceAdapter(
                 sb.append(header)
                 sb.setSpan(android.text.style.ForegroundColorSpan(subColor), hStart, sb.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
 
-                // Zugeklappt nur die zuletzt geänderten Werte zeigen, aufgeklappt alle.
-                val lines = if (isExpanded) model.readings else model.readings.filter {
-                    "${it.endpointId}/${it.clusterId}/${it.attributeId}" in changed
-                }
-                for (r in lines) {
-                    val key = "${r.endpointId}/${r.clusterId}/${r.attributeId}"
-                    sb.append("\n")
-                    val start = sb.length
-                    sb.append("${r.label} = ${r.value}")
-                    val color = if (key in changed) hiColor else onColor
-                    sb.setSpan(android.text.style.ForegroundColorSpan(color), start, sb.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                // Cluster, die auf mehreren Endpoints vorkommen -> in der Überschrift disambiguieren.
+                val epPerCluster = model.readings.groupBy { it.clusterId }
+                    .mapValues { e -> e.value.map { it.endpointId }.toSet().size }
+
+                if (isExpanded) {
+                    var lastGroup: Pair<Int, Long>? = null
+                    for (r in model.readings) {
+                        val g = r.endpointId to r.clusterId
+                        if (g != lastGroup) {
+                            sb.append("\n\n")
+                            val gs = sb.length
+                            sb.append(groupTitle(r.clusterId, r.endpointId, (epPerCluster[r.clusterId] ?: 1) > 1))
+                            sb.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), gs, sb.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                            sb.setSpan(android.text.style.ForegroundColorSpan(onColor), gs, sb.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                            lastGroup = g
+                        }
+                        val key = "${r.endpointId}/${r.clusterId}/${r.attributeId}"
+                        sb.append("\n   ")
+                        val start = sb.length
+                        sb.append("${MatterNames.attribute(r.clusterId, r.attributeId)} = ${r.value}")
+                        val color = if (key in changed) hiColor else onColor
+                        sb.setSpan(android.text.style.ForegroundColorSpan(color), start, sb.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                } else {
+                    // Zugeklappt: nur die zuletzt geänderten Werte, kompakt mit Gruppenname.
+                    for (r in model.readings.filter { "${it.endpointId}/${it.clusterId}/${it.attributeId}" in changed }) {
+                        sb.append("\n")
+                        val start = sb.length
+                        sb.append("${groupTitle(r.clusterId, r.endpointId, (epPerCluster[r.clusterId] ?: 1) > 1)} · ${MatterNames.attribute(r.clusterId, r.attributeId)} = ${r.value}")
+                        sb.setSpan(android.text.style.ForegroundColorSpan(hiColor), start, sb.length, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
                 }
                 holder.statusTv.text = sb
                 holder.statusTv.isClickable = true
@@ -957,6 +977,13 @@ class DeviceAdapter(
 
         holder.shareBtn.setOnClickListener { onShare(nodeId) }
         holder.unpairBtn.setOnClickListener { onUnpair(nodeId) }
+    }
+
+    // Überschrift einer Wertegruppe: Switch = "Taste N", Mehrfach-Cluster mit Endpoint, sonst Cluster-Name.
+    private fun groupTitle(clusterId: Long, endpointId: Int, multiEndpoint: Boolean): String = when {
+        clusterId == 59L -> "Taste $endpointId"                                 // Switch (0x003B)
+        multiEndpoint -> "${MatterNames.cluster(clusterId)} · Endpoint $endpointId"
+        else -> MatterNames.cluster(clusterId)
     }
 
     override fun getItemCount(): Int = devices.size
