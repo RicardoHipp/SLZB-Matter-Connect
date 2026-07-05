@@ -33,15 +33,15 @@ on({id: 'javascript.0.matter_pairing_code', change: 'any'}, function (obj) {
         sendTo('matter.0', 'controllerCommissionDevice', { manualCode: code }, function (result) {
             log('Ergebnis der Koppelung: ' + JSON.stringify(result));
 
-            // Erfolg/Fehler bestmoeglich aus dem Ergebnis ableiten.
-            // HINWEIS: Die genaue Struktur von "result" kann je nach matter.0-Version
-            // abweichen. Falls Erfolg faelschlich als Fehler erkannt wird (oder umgekehrt),
-            // oben die geloggte Struktur ansehen und die folgende Zeile anpassen.
-            let ok = result && !result.error;
+            // Erfolg/Fehler aus dem Ergebnis ableiten.
+            // Bestaetigt aus dem ioBroker-Log: matter.0 liefert bei Erfolg
+            //   {"result":true,"nodeId":"..."}  (kein error-Feld).
+            // Daher gilt Erfolg NUR bei result.result === true; alles andere ist ein Fehler.
+            let ok = result && result.result === true;
             if (ok) {
                 setState('javascript.0.matter_pairing_result', 'success', true);
             } else {
-                let msg = (result && (result.error || result.message)) || 'unbekannter Fehler';
+                let msg = (result && (result.error || result.message)) || ('Adapter meldete: ' + JSON.stringify(result));
                 setState('javascript.0.matter_pairing_result', 'error: ' + msg, true);
             }
 
