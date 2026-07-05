@@ -105,6 +105,10 @@ object MatterValueFormatter {
         if (raw is Boolean) {
             return if (clusterId == 6L) { if (raw) "An" else "Aus" } else { if (raw) "Ja" else "Nein" }
         }
+        // Enum-Klartext (generiert): z.B. Power Source / Status = 1 -> "Active"
+        asLong(raw)?.let { v ->
+            MatterNames.attributeEnum(clusterId, attributeId, v)?.let { return it }
+        }
         return raw.toString()
     }
 

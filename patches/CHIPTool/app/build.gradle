@@ -139,6 +139,8 @@ tasks.register('generateMatterNames') {
     doLast {
         def clusterNames = [:]   // Long -> String
         def attrNames = [:]      // Long -> (Long -> String)
+        def enumsByName = [:]    // String -> (Long -> String)
+        def attrTypes = [:]      // "cCode/aCode" -> Enum-Typname
         try {
             def candidates = [
                 file("$projectDir/../../../../src/app/zap-templates/zcl/data-model/chip"),
@@ -151,6 +153,18 @@ tasks.register('generateMatterNames') {
                 xmlDir.listFiles({ f -> f.name.endsWith('.xml') } as FileFilter).each { xf ->
                     try {
                         def cfg = new groovy.xml.XmlSlurper().parse(xf)
+                        cfg.'enum'.each { en ->
+                            def enName = (en.@name.text() ?: '').trim()
+                            if (enName) {
+                                def items = [:]
+                                en.item.each { it2 ->
+                                    def vTxt = (it2.@value.text() ?: '').trim()
+                                    def iName = (it2.@name.text() ?: '').trim()
+                                    if (vTxt && iName) { try { items[Long.decode(vTxt)] = iName } catch (Exception ignore) {} }
+                                }
+                                if (items) enumsByName[enName] = items
+                            }
+                        }
                         cfg.cluster.each { cl ->
                             def codeTxt = cl.code.text()?.trim()
                             if (codeTxt) {
@@ -162,7 +176,12 @@ tasks.register('generateMatterNames') {
                                     def aCodeTxt = (at.@code.text() ?: '').trim()
                                     def aName = (at.@name.text() ?: '').trim()
                                     if (!aName) aName = (at.text() ?: '').trim()
-                                    if (aCodeTxt && aName) am[Long.decode(aCodeTxt)] = aName
+                                    def aType = (at.@type.text() ?: '').trim()
+                                    if (aCodeTxt) {
+                                        def aCode = Long.decode(aCodeTxt)
+                                        if (aName) am[aCode] = aName
+                                        if (aType) attrTypes["${cCode}/${aCode}"] = aType
+                                    }
                                 }
                             }
                         }
@@ -173,6 +192,20 @@ tasks.register('generateMatterNames') {
             }
         } catch (Exception e) {
             logger.warn("MatterNames: Fehler beim Scannen: ${e.message}")
+        }
+
+        // Attribute mit Enum-Typ aufloesen -> cCode -> (aCode -> {Wert -> Name})
+        def attrEnums = [:]
+        try {
+            attrTypes.each { k, typeName ->
+                def items = enumsByName[typeName]
+                if (items) {
+                    def p = k.split('/')
+                    attrEnums.get(p[0] as Long, [:]).put(p[1] as Long, items)
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("MatterNames: Enum-Aufloesung fehlgeschlagen: ${e.message}")
         }
 
         def pkgDir = new File(outDir, "com/google/chip/chiptool")
@@ -192,12 +225,26 @@ tasks.register('generateMatterNames') {
             sb << "        ),\n"
         }
         sb << "    )\n"
+        sb << "    // cluster -> attribut -> (enumWert -> Klartext)\n"
+        sb << "    val attributeEnums: Map<Long, Map<Long, Map<Long, String>>> = mapOf(\n"
+        attrEnums.sort().each { c, am ->
+            sb << "        ${c}L to mapOf(\n"
+            am.sort().each { a, vm ->
+                sb << "            ${a}L to mapOf(\n"
+                vm.sort().each { v, n -> sb << "                ${v}L to \"${esc(n)}\",\n" }
+                sb << "            ),\n"
+            }
+            sb << "        ),\n"
+        }
+        sb << "    )\n"
         sb << "    fun cluster(id: Long): String = clusterNames[id] ?: (\"Cluster 0x%04X\".format(id))\n"
         sb << "    fun attribute(clusterId: Long, attrId: Long): String =\n"
         sb << "        attributeNames[clusterId]?.get(attrId) ?: (\"Attr 0x%04X\".format(attrId))\n"
+        sb << "    fun attributeEnum(clusterId: Long, attrId: Long, value: Long): String? =\n"
+        sb << "        attributeEnums[clusterId]?.get(attrId)?.get(value)\n"
         sb << "}\n"
         new File(pkgDir, "MatterNames.kt").text = sb.toString()
-        logger.lifecycle("MatterNames: ${clusterNames.size()} Cluster generiert nach ${outDir}")
+        logger.lifecycle("MatterNames: ${clusterNames.size()} Cluster, ${attrEnums.size()} Cluster mit Enums generiert nach ${outDir}")
     }
 }
 
