@@ -518,19 +518,11 @@ class IoBrokerCompanionFragment : Fragment() {
                             }
                         }
 
-                        var summary: String? = null
-                        for ((endpointId, endpointState) in nodeState.endpointStates) {
-                            for ((clusterId, clusterState) in endpointState.clusterStates) {
-                                for ((attributeId, attributeState) in clusterState.attributeStates) {
-                                    summary = "EP$endpointId/Cl$clusterId/Attr$attributeId = ${attributeState.value}"
-                                }
-                            }
-                        }
-                        if (summary == null) return
+                        // Generisches Modell aus dem NodeState bauen (Fähigkeiten + benannte Werte).
+                        val model = MatterModelParser.parse(nodeState)
                         val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.GERMANY).format(java.util.Date())
-                        val text = "Update ($time): $summary — Thread-Netzwerk OK"
                         act.runOnUiThread {
-                            if (isAdded) deviceAdapter.updateStatus(nodeId, text)
+                            if (isAdded) deviceAdapter.updateModel(nodeId, model, time)
                         }
                     }
 
@@ -864,6 +856,8 @@ class DeviceAdapter(
 ) : RecyclerView.Adapter<DeviceAdapter.ViewHolder>() {
 
     private val statuses = mutableMapOf<Long, String>()
+    private val models = mutableMapOf<Long, MatterDeviceModel>()
+    private val lastUpdate = mutableMapOf<Long, String>()
     private val names = mutableMapOf<Long, String>()
     private val codes = mutableMapOf<Long, String>()
     private val expandedStates = mutableMapOf<Long, Boolean>()
@@ -898,32 +892,43 @@ class DeviceAdapter(
             holder.codeTv.visibility = View.GONE
         }
 
-        val fullStatus = statuses[nodeId] ?: "Noch keine Live-Daten"
-        if (fullStatus.startsWith("Update (") && fullStatus.contains("):")) {
-            val closeParenIdx = fullStatus.indexOf("):")
-            val timestamp = fullStatus.substring(0, closeParenIdx + 1)
-            val details = fullStatus.substring(closeParenIdx + 2).trim()
-
-            val isExpanded = expandedStates[nodeId] ?: false
-            if (isExpanded) {
-                holder.statusTv.text = "$timestamp Details ▴\n$details"
-                holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(holder.itemView.context, R.color.theme_on))
-            } else {
-                holder.statusTv.text = "$timestamp Details ▾"
-                holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(holder.itemView.context, R.color.theme_accent))
+        val ctx = holder.itemView.context
+        val model = models[nodeId]
+        val errorStatus = statuses[nodeId]
+        when {
+            model != null -> {
+                val header = "Aktualisiert ${lastUpdate[nodeId] ?: ""} · ${model.readings.size} Werte"
+                val isExpanded = expandedStates[nodeId] ?: false
+                if (isExpanded) {
+                    val body = model.readings.joinToString("\n") { "${it.label} = ${it.value}" }
+                    holder.statusTv.text = "$header ▴\n$body"
+                    holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_on))
+                } else {
+                    holder.statusTv.text = "$header ▾"
+                    holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_accent))
+                }
+                holder.statusTv.isClickable = true
+                holder.statusTv.setOnClickListener {
+                    expandedStates[nodeId] = !isExpanded
+                    notifyItemChanged(position)
+                }
             }
-
-            holder.statusTv.setOnClickListener {
-                expandedStates[nodeId] = !isExpanded
-                notifyItemChanged(position)
+            errorStatus != null -> {
+                holder.statusTv.text = errorStatus
+                holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_onv))
+                holder.statusTv.setOnClickListener(null)
+                holder.statusTv.isClickable = false
             }
-        } else {
-            holder.statusTv.text = fullStatus
-            holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(holder.itemView.context, R.color.theme_onv))
-            holder.statusTv.setOnClickListener(null)
-            holder.statusTv.isClickable = false
+            else -> {
+                holder.statusTv.text = "Noch keine Live-Daten"
+                holder.statusTv.setTextColor(androidx.core.content.ContextCompat.getColor(ctx, R.color.theme_onv))
+                holder.statusTv.setOnClickListener(null)
+                holder.statusTv.isClickable = false
+            }
         }
 
+        // Schalter nur bei schaltbaren Geräten (OnOff-Cluster vorhanden).
+        holder.toggleSwitch.visibility = if (model?.switchable == true) View.VISIBLE else View.GONE
         holder.toggleSwitch.setOnCheckedChangeListener(null)
         holder.toggleSwitch.isChecked = false
         holder.toggleSwitch.setOnCheckedChangeListener { _, isChecked ->
@@ -943,6 +948,17 @@ class DeviceAdapter(
 
     fun updateStatus(nodeId: Long, text: String) {
         statuses[nodeId] = text
+        models.remove(nodeId) // Fehler -> Modell verwerfen, Meldung zeigen
+        val index = devices.indexOf(nodeId)
+        if (index >= 0) {
+            notifyItemChanged(index)
+        }
+    }
+
+    fun updateModel(nodeId: Long, model: MatterDeviceModel, time: String) {
+        models[nodeId] = model
+        lastUpdate[nodeId] = time
+        statuses.remove(nodeId) // gültige Live-Daten -> evtl. alte Fehlermeldung entfernen
         val index = devices.indexOf(nodeId)
         if (index >= 0) {
             notifyItemChanged(index)
