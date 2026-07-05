@@ -39,7 +39,10 @@ on({id: BASE + '.pairing_code', change: 'any'}, function (obj) {
         // App weiss dadurch sofort: angekommen, Koppelung laeuft.
         setState(BASE + '.pairing_result', 'processing', true);
 
-        sendTo(adapter, 'controllerCommissionDevice', { manualCode: code }, function (result) {
+        // Timeout auf 60s hochgesetzt (4. Parameter): der sendTo-Callback des JS-Adapters
+        // wirft sonst nach 20s (Default) selbst {error:'timeout'} und verwirft danach die
+        // echte Antwort von matter.0, obwohl das Commissioning oft erst nach ~24s fertig ist.
+        sendTo(adapter, 'controllerCommissionDevice', { manualCode: code }, { timeout: 60000 }, function (result) {
             log('Ergebnis der Koppelung: ' + JSON.stringify(result));
 
             // Bestaetigt aus dem ioBroker-Log: matter.0 liefert bei Erfolg
