@@ -66,7 +66,10 @@ object MatterModelParser {
                     if (attributeId in GLOBAL_META_ATTRS) continue
                     val v = attributeState.value
                     readings.add(
-                        MatterReading(endpointId, clusterId, attributeId, v?.toString() ?: "—")
+                        MatterReading(
+                            endpointId, clusterId, attributeId,
+                            MatterValueFormatter.format(clusterId, attributeId, v)
+                        )
                     )
                 }
             }
@@ -74,5 +77,44 @@ object MatterModelParser {
         // Stabile, lesbare Reihenfolge: nach Endpoint, dann Cluster, dann Attribut.
         readings.sortWith(compareBy({ it.endpointId }, { it.clusterId }, { it.attributeId }))
         return MatterDeviceModel(switchable, onOffEndpoint, readings)
+    }
+}
+
+/**
+ * Macht Roh-Werte menschenlesbar: Einheiten/Skalierung für die gängigen Cluster,
+ * Booleans als Ja/Nein bzw. An/Aus. Unbekanntes bleibt roh (kein Bruch).
+ */
+object MatterValueFormatter {
+    private val DE = java.util.Locale.GERMANY
+
+    fun format(clusterId: Long, attributeId: Long, raw: Any?): String {
+        if (raw == null) return "—"
+
+        when (clusterId) {
+            47L -> when (attributeId) { // Power Source
+                12L -> asLong(raw)?.let { return "${it / 2} %" }                       // BatPercentRemaining (0,5 %-Schritte)
+                11L -> asLong(raw)?.let { return "%.2f V".format(DE, it / 1000.0) }     // BatVoltage (mV)
+            }
+            1026L -> if (attributeId == 0L) asLong(raw)?.let { return "%.1f °C".format(DE, it / 100.0) } // TemperatureMeasurement
+            1029L -> if (attributeId == 0L) asLong(raw)?.let { return "%.1f %%".format(DE, it / 100.0) } // RelativeHumidity
+            1030L -> if (attributeId == 0L) asLong(raw)?.let {                          // OccupancySensing
+                return if ((it.toInt() and 1) != 0) "Bewegung: ja" else "Bewegung: nein"
+            }
+        }
+
+        if (raw is Boolean) {
+            return if (clusterId == 6L) { if (raw) "An" else "Aus" } else { if (raw) "Ja" else "Nein" }
+        }
+        return raw.toString()
+    }
+
+    private fun asLong(v: Any?): Long? = when (v) {
+        is Long -> v
+        is Int -> v.toLong()
+        is Short -> v.toLong()
+        is Byte -> v.toLong()
+        is Number -> v.toLong()
+        is String -> v.toLongOrNull()
+        else -> null
     }
 }
