@@ -10,7 +10,7 @@
         android:orientation="vertical"
         android:padding="16dp">
 
-        <!-- Card: SMLIGHT IP Setup -->
+        <!-- Card: OTBR-Server IP Setup -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -30,7 +30,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="SMLIGHT Stick Verbindung"
+                    android:text="OTBR-Server Verbindung"
                     android:textColor="#FFFFFF"
                     android:textSize="18sp"
                     android:textStyle="bold"
@@ -50,7 +50,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="2"
                         android:layout_marginEnd="8dp"
-                        android:hint="SMLIGHT Stick IP-Adresse"
+                        android:hint="OTBR-Server IP-Adresse"
                         app:boxStrokeColor="#4CAF50">
 
                         <com.google.android.material.textfield.TextInputEditText

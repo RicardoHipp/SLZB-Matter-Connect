@@ -28,6 +28,11 @@ import chip.devicecontroller.CommissionParameters
 import chip.devicecontroller.DeviceAttestationDelegate
 import chip.devicecontroller.ICDRegistrationInfo
 import chip.devicecontroller.NetworkCredentials
+import chip.devicecontroller.ReportCallback
+import chip.devicecontroller.model.ChipAttributePath
+import chip.devicecontroller.model.ChipEventPath
+import chip.devicecontroller.model.ChipPathId
+import chip.devicecontroller.model.NodeState
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.button.MaterialButton
 import com.google.chip.chiptool.bluetooth.BluetoothManager
@@ -495,8 +500,13 @@ class CommissioningSheetFragment : BottomSheetDialogFragment() {
             dotStep3.setBackgroundResource(R.drawable.stepper_dot_active)
             val devicePrefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
             val reportedName = devicePrefs.getString("device_name_$nodeId", null)
-            val devName = reportedName ?: (deviceInfo?.let { "Gerät ${it.productId}" } ?: "Gerät")
-            commissionedDeviceNameTv.text = "$devName ist jetzt verbunden"
+            if (reportedName != null) {
+                commissionedDeviceNameTv.text = "$reportedName ist jetzt verbunden"
+            } else {
+                // Neutraler Text + echten Namen per Read nachladen (kein "Gerät <Nummer>" mehr).
+                commissionedDeviceNameTv.text = "Gerät ist jetzt verbunden"
+                fetchDoneScreenName(nodeId)
+            }
             
             sheetActionButton.visibility = View.VISIBLE
             sheetActionButton.setOnClickListener {
@@ -506,6 +516,58 @@ class CommissioningSheetFragment : BottomSheetDialogFragment() {
                     navHost.refreshDeviceList()
                 }
                 dismiss()
+            }
+        }
+    }
+
+    private fun fetchDoneScreenName(nodeId: Long) {
+        lifecycleScope.launch {
+            try {
+                val device = withContext(Dispatchers.IO) {
+                    ChipClient.getConnectedDevicePointer(requireContext(), nodeId)
+                }
+                deviceController.readAttributePath(
+                    object : ReportCallback {
+                        override fun onReport(nodeState: NodeState?) {
+                            val basicInfo = nodeState?.getEndpointState(0)?.getClusterState(40L)
+                            val nodeLabel = basicInfo?.getAttributeState(5L)?.value as? String
+                            val productName = basicInfo?.getAttributeState(3L)?.value as? String
+                            val vendorName = basicInfo?.getAttributeState(1L)?.value as? String
+                            val name = when {
+                                !nodeLabel.isNullOrBlank() -> nodeLabel
+                                !productName.isNullOrBlank() -> productName
+                                !vendorName.isNullOrBlank() -> vendorName
+                                else -> null
+                            }
+                            if (name != null) {
+                                activity?.getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+                                    ?.edit()?.putString("device_name_$nodeId", name)?.apply()
+                                activity?.runOnUiThread {
+                                    if (isAdded) commissionedDeviceNameTv.text = "$name ist jetzt verbunden"
+                                }
+                            }
+                        }
+
+                        override fun onError(
+                            attributePath: ChipAttributePath?,
+                            eventPath: ChipEventPath?,
+                            ex: java.lang.Exception
+                        ) {
+                            Log.w(DBG, "Done-Screen Name-Read fehlgeschlagen", ex)
+                        }
+                    },
+                    device,
+                    listOf(
+                        ChipAttributePath.newInstance(
+                            ChipPathId.forId(0L),
+                            ChipPathId.forId(40L),
+                            ChipPathId.forWildcard()
+                        )
+                    ),
+                    0
+                )
+            } catch (e: Exception) {
+                Log.w(DBG, "Done-Screen getConnectedDevicePointer fehlgeschlagen", e)
             }
         }
     }

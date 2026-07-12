@@ -189,7 +189,7 @@ class IoBrokerSettingsFragment : Fragment() {
                         .putString("fetched_network_key", networkKey)
                         .apply()
 
-                    Toast.makeText(requireContext(), "Stick-Daten geladen!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(requireContext(), "OTBR-Daten geladen!", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     prefs.edit()
                         .remove("device_custom_name_stick")

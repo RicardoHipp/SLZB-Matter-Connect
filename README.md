@@ -1,9 +1,30 @@
-# SLZB-Matter Connect
+# OTBR-Matter Connect
+
+> Matter-over-Thread anlernen über deinen **offenen** Border-Router (OTBR) — **ohne** Google-/Apple-Hub.
 
 Android-Begleit-App für ioBroker, basierend auf Googles offiziellem Matter-Referenztool
 (`CHIPTool` aus [connectedhomeip](https://github.com/project-chip/connectedhomeip)).
-Koppelt Matter-over-Thread-Geräte automatisch mit Handy **und** ioBroker (Multi-Admin),
-ohne manuelle Eingabe am PC.
+
+Damit lernst du **Matter-over-Thread-Geräte ganz einfach in ioBroker an** – **ohne**
+ioBroker-Visu-App, **ohne** Cloud-Anbindung und **ohne** installierten Bluetooth-Adapter
+am ioBroker-Host. Das Bluetooth-Commissioning übernimmt dein **Handy**; das Gerät geht per
+**Thread** über deinen SLZB-Border-Router ins Netz, und die App koppelt es automatisch
+sowohl mit dem Handy **als auch** mit ioBroker (Multi-Admin) – ganz ohne manuelle
+Code-Eingabe am PC.
+
+Die App spricht ioBroker dabei **direkt über die WebSocket-API** des `web`-Adapters an.
+
+## Benötigte Hardware
+
+Ein **SMLIGHT SLZB-Stick mit OpenThread-Border-Router (OTBR)** als Thread-Grenzrouter.
+Geeignet sind vor allem die Multiradio-Modelle, die Zigbee **und** Thread gleichzeitig
+können:
+
+- **SLZB-MR1**, **SLZB-MR2**, **SLZB-MR3** (Multiradio – die typische Wahl für Thread/Matter)
+- außerdem **SLZB-06**- und **SLZB-07**-Modelle mit entsprechender Thread-/OTBR-Firmware
+
+Dazu ein Android-Handy mit Bluetooth (für das Commissioning) und eine laufende
+ioBroker-Instanz mit Matter-Adapter.
 
 ## Fertige APK herunterladen
 
@@ -13,28 +34,23 @@ auf dem Handy installieren.
 
 ## ioBroker vorbereiten
 
-Damit die App mit deinem ioBroker sprechen kann, sind zwei einmalige Schritte
-**in ioBroker selbst** nötig (unabhängig davon, ob du die fertige APK nutzt
-oder selbst baust):
+Die App spricht ioBroker **direkt über die WebSocket-API** an. Voraussetzungen:
 
-1. **Adapter "Einfache RESTful API" (simple-api) installieren.**
-   In ioBroker unter "Adapter" nach `simple-api` suchen, installieren, eine
-   Instanz anlegen und auf **Port 8087** einstellen (Standardwert, den die App
-   vorschlägt). Darüber laufen sowohl der "Verbindung testen"-Button in der
-   App als auch das automatische Übermitteln des Koppelungscodes.
+1. **`web`-Adapter** aktiv (alternativ `ws`-Adapter). Der ist für Admin/Vis meist
+   ohnehin schon installiert. Die App verbindet sich per WebSocket – **Standard-Port 8082**.
+   Den genauen Port findest du in ioBroker unter **Instanzen → web**. In der App trägst
+   du die **IP deines ioBroker-Servers** und diesen Port ein.
+2. **Matter-Adapter** (`matter.0`) installiert und der Controller aktiv.
 
-2. **Skript `iobroker/matter_pairing_code.js` anlegen.**
-   Inhalt dieser Datei als neues Skript in einer Instanz des JavaScript-Adapters
-   (`javascript.0`) in ioBroker anlegen und starten. Es nimmt den von der App
-   übermittelten Koppelungscode entgegen und stößt die eigentliche Koppelung
-   im Matter-Adapter (`matter.0`) an.
+> **Hinweis zur Anmeldung:** Aktuell wird der Zugriff **ohne Login** getestet
+> (der `web`-Adapter steht dabei auf „keine Authentifizierung"). Eine Passwort-/
+> Token-Anmeldung ist noch nicht implementiert.
 
 ## Selbst entwickeln / bauen
 
 Dieses Repo enthält **nicht** das komplette Matter-SDK (mehrere GB), sondern nur:
 
 - `patches/CHIPTool/` – die geänderten/neuen Android-Dateien
-- `iobroker/` – das Vermittler-Skript für ioBroker (`matter_pairing_code.js`)
 - `scripts/setup.sh` – klont connectedhomeip auf einem gepinnten Commit und wendet den Patch an
 - `.devcontainer/` – fertige Docker-Entwicklungsumgebung (VS Code "Reopen in Container")
 

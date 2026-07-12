@@ -65,6 +65,7 @@ class IoBrokerCompanionFragment : Fragment() {
     private lateinit var connectionStatusTv: TextView
     private lateinit var themeToggleButton: ImageButton
     private lateinit var settingsButton: ImageButton
+    private lateinit var helpButton: ImageButton
     
     private lateinit var startCommissioningBtn: MaterialButton
     private lateinit var tabDevicesLayout: RecyclerView
@@ -106,6 +107,7 @@ class IoBrokerCompanionFragment : Fragment() {
         connectionStatusTv = view.findViewById(R.id.connectionStatusTv)
         themeToggleButton = view.findViewById(R.id.themeToggleButton)
         settingsButton = view.findViewById(R.id.settingsButton)
+        helpButton = view.findViewById(R.id.helpButton)
         
         startCommissioningBtn = view.findViewById(R.id.startCommissioningBtn)
         tabDevicesLayout = view.findViewById(R.id.tabDevicesLayout)
@@ -130,6 +132,7 @@ class IoBrokerCompanionFragment : Fragment() {
 
         // Theme Toggle Click
         themeToggleButton.setOnClickListener { toggleTheme() }
+        helpButton.setOnClickListener { showHelpDialog() }
 
         // Settings Button Click (Slide-In)
         settingsButton.setOnClickListener {
@@ -296,7 +299,7 @@ class IoBrokerCompanionFragment : Fragment() {
             val stickSymbol = if (stickSuccess) greenDot else redDot
 
             val ioText = "ioBroker-Matter: $ioSymbol"
-            val stickText = "SLZB-Ping: $stickSymbol"
+            val stickText = "OTBR-Ping: $stickSymbol"
             val text = "$ioText · $stickText"
             setConnectionState(iobrokerSuccess, stickSuccess, text)
         }
@@ -378,6 +381,29 @@ class IoBrokerCompanionFragment : Fragment() {
                 clearThreadCredentials()
             }
         }
+    }
+
+    private fun showHelpDialog() {
+        val text = "Ablauf: Matter-over-Thread-Gerät in ioBroker anlernen\n\n" +
+            "1) Einrichten (Zahnrad oben rechts)\n" +
+            "- IP deines ioBroker + WS-Port (Standard 8082) und Matter-Instanz eintragen\n" +
+            "- optional die Thread-Daten vom OTBR-Server abrufen\n" +
+            "- mit 'Verbindung testen' prüfen\n\n" +
+            "2) Neues Gerät anlernen (Button 'Gerät hinzufügen')\n" +
+            "- QR-/Kopplungscode des Geräts scannen\n" +
+            "- das Handy übernimmt das Bluetooth-Anlernen; das Gerät geht per Thread über den OTBR ins Netz\n" +
+            "- danach erscheint es in der Geräteliste\n\n" +
+            "3) An ioBroker freigeben (Teilen-Symbol am Gerät)\n" +
+            "- die App öffnet am Gerät ein Kopplungsfenster und hält es (falls möglich) wach\n" +
+            "- der Kopplungscode wird direkt per WebSocket an ioBroker geschickt\n" +
+            "- ioBroker koppelt das Gerät als zweiter Administrator (Multi-Admin); es taucht dann auch im Matter-Adapter auf\n" +
+            "- klappt die automatische Kopplung nicht, kannst du den angezeigten Code manuell in ioBroker eingeben\n\n" +
+            "Oben: grüner Punkt = ioBroker/Stick erreichbar. Sonne/Mond schaltet Hell/Dunkel. Entkoppeln über das Gerät in der Liste."
+        AlertDialog.Builder(requireContext())
+            .setTitle("So funktioniert's")
+            .setMessage(text)
+            .setPositiveButton("Verstanden", null)
+            .show()
     }
 
     private fun toggleTheme() {
@@ -491,6 +517,51 @@ class IoBrokerCompanionFragment : Fragment() {
                 val device = withContext(Dispatchers.IO) {
                     ChipClient.getConnectedDevicePointer(requireContext(), nodeId)
                 }
+
+                // Proaktives, gezieltes Read der BasicInformation (Cluster 0x28) direkt nach dem
+                // Verbinden -> der richtige Geraetename steht sofort, statt auf die erste
+                // spontane Subscription-Meldung des Geraets zu warten.
+                deviceController.readAttributePath(
+                    object : ReportCallback {
+                        override fun onReport(nodeState: NodeState?) {
+                            val act = activity ?: return
+                            val basicInfo = nodeState?.getEndpointState(0)?.getClusterState(40L)
+                            val nodeLabel = basicInfo?.getAttributeState(5L)?.value as? String
+                            val productName = basicInfo?.getAttributeState(3L)?.value as? String
+                            val vendorName = basicInfo?.getAttributeState(1L)?.value as? String
+                            val name = when {
+                                !nodeLabel.isNullOrBlank() -> nodeLabel
+                                !productName.isNullOrBlank() -> productName
+                                !vendorName.isNullOrBlank() -> vendorName
+                                else -> null
+                            }
+                            if (name != null) {
+                                val prefs = act.getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+                                prefs.edit().putString("device_name_$nodeId", name).apply()
+                                if (prefs.getString("device_custom_name_$nodeId", null) == null) {
+                                    act.runOnUiThread { if (isAdded) deviceAdapter.updateName(nodeId, name) }
+                                }
+                            }
+                        }
+
+                        override fun onError(
+                            attributePath: ChipAttributePath?,
+                            eventPath: ChipEventPath?,
+                            ex: java.lang.Exception
+                        ) {
+                            Log.w("Companion", "BasicInformation-Read fehlgeschlagen fuer $nodeId", ex)
+                        }
+                    },
+                    device,
+                    listOf(
+                        ChipAttributePath.newInstance(
+                            ChipPathId.forId(0L),
+                            ChipPathId.forId(40L),
+                            ChipPathId.forWildcard()
+                        )
+                    ),
+                    0
+                )
 
                 val callback = object : ReportCallback {
                     override fun onReport(nodeState: NodeState?) {
@@ -644,13 +715,6 @@ class IoBrokerCompanionFragment : Fragment() {
         val iobrokerPort = prefs.getString("iobroker_port", "8082") ?: "8082"
         val matterInstance = prefs.getString("matter_instance", "0") ?: "0"
 
-        if (iobrokerIp.isBlank()) {
-            Snackbar.make(requireView(), "ioBroker ist noch nicht eingerichtet", Snackbar.LENGTH_LONG)
-                .setAction("Einstellungen") { settingsButton.performClick() }
-                .show()
-            return
-        }
-
         // Sofort-Feedback: Spinner-Dialog, damit klar ist dass etwas laeuft (verhindert Doppel-Tippen).
         val progress = showShareProgress("Verbinde mit Gerät…")
 
@@ -686,6 +750,19 @@ class IoBrokerCompanionFragment : Fragment() {
                                 }
                                 return
                             }
+                            // ioBroker nicht eingerichtet -> Code direkt zur manuellen Eingabe zeigen
+                            // (z.B. fuer Home Assistant oder manuelle Eingabe in ioBroker).
+                            if (iobrokerIp.isBlank()) {
+                                activity?.runOnUiThread {
+                                    progress.dialog.dismiss()
+                                    if (isAdded) showManualPairingDialog(
+                                        manualPairingCode,
+                                        testSetupPinCode,
+                                        "ioBroker ist nicht eingerichtet — gib den Code manuell in deiner Matter-Zentrale (ioBroker, Home Assistant, …) ein."
+                                    )
+                                }
+                                return
+                            }
                             viewLifecycleOwner.lifecycleScope.launch {
                                 // Erst pruefen ob der ioBroker Matter-Adapter ueberhaupt erreichbar/alive ist.
                                 // Wenn nicht: gar nicht senden, direkt den Code zur manuellen Eingabe zeigen.
@@ -712,7 +789,7 @@ class IoBrokerCompanionFragment : Fragment() {
                                                         awakeOk ->
                                                             "Gerät wachgehalten (Dauer unbekannt, ${awakeReqMs / 1000} s angefragt)"
                                                         else ->
-                                                            "Gerät unterstützt kein Wachhalten (kein ICD) — kopple trotzdem"
+                                                            "Gerät unterstützt kein aktives Wachhalten (Koppeln läuft normal weiter)"
                                                     }
                                                     Toast.makeText(requireContext(), awakeMsg, Toast.LENGTH_LONG).show()
                                                 }
@@ -811,7 +888,7 @@ class IoBrokerCompanionFragment : Fragment() {
     // Haelt ein ICD-/Batteriegeraet aktiv (ICD-Management-Cluster 0x0046, StayActiveRequest 0x03),
     // damit ioBroker es waehrend des Koppelns erreichen kann.
     // Rueckgabe: (angenommen, versprocheneDauerMs); promisedMs = null wenn Antwort nicht parsebar.
-    private suspend fun keepDeviceAwake(devicePtr: Long, requestedMs: Long): Pair<Boolean, Long?> =
+    private suspend fun keepDeviceAwake(devicePtr: Long, requestedMs: Long): Triple<Boolean, Long?, String?> =
         suspendCancellableCoroutine { cont ->
             try {
                 val tlvWriter = TlvWriter()
@@ -823,8 +900,9 @@ class IoBrokerCompanionFragment : Fragment() {
                 deviceController.invoke(
                     object : InvokeCallback {
                         override fun onError(ex: java.lang.Exception?) {
-                            Log.w("Companion", "StayActiveRequest fehlgeschlagen (Gerät evtl. kein ICD)", ex)
-                            if (cont.isActive) cont.resume(Pair(false, null))
+                            val reason = ex?.message ?: ex?.javaClass?.simpleName ?: "unbekannter Fehler"
+                            Log.w("Companion", "StayActiveRequest fehlgeschlagen: $reason", ex)
+                            if (cont.isActive) cont.resume(Triple(false, null, reason))
                         }
                         override fun onResponse(response: InvokeElement?, successCode: Long) {
                             var promised: Long? = null
@@ -839,7 +917,7 @@ class IoBrokerCompanionFragment : Fragment() {
                             } catch (e: Exception) {
                                 Log.w("Companion", "StayActiveResponse nicht parsebar", e)
                             }
-                            if (cont.isActive) cont.resume(Pair(true, promised))
+                            if (cont.isActive) cont.resume(Triple(true, promised, null))
                         }
                     },
                     devicePtr,
@@ -848,8 +926,9 @@ class IoBrokerCompanionFragment : Fragment() {
                     0
                 )
             } catch (e: Exception) {
-                Log.w("Companion", "StayActiveRequest Aufbau fehlgeschlagen", e)
-                if (cont.isActive) cont.resume(Pair(false, null))
+                val reason = e.message ?: e.javaClass.simpleName
+                Log.w("Companion", "StayActiveRequest Aufbau fehlgeschlagen: $reason", e)
+                if (cont.isActive) cont.resume(Triple(false, null, reason))
             }
         }
 

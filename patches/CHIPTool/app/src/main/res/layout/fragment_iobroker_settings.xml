@@ -75,7 +75,7 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- Section: SMLIGHT Stick -->
+            <!-- Section: OTBR-Server -->
             <com.google.android.material.card.MaterialCardView
                 style="@style/CustomCardViewStyle"
                 android:layout_width="match_parent"
@@ -92,7 +92,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="SMLIGHT Stick"
+                        android:text="OTBR-Server"
                         android:textColor="@color/theme_on"
                         android:textSize="13sp"
                         android:textStyle="bold"
