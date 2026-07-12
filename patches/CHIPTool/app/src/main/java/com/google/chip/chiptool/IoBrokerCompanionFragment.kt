@@ -48,6 +48,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import matter.tlv.AnonymousTag
 import matter.tlv.TlvWriter
+import matter.tlv.ContextSpecificTag
+import matter.tlv.TlvReader
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -226,7 +230,7 @@ class IoBrokerCompanionFragment : Fragment() {
     private suspend fun testConnectionState() {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val iobrokerIp = prefs.getString("iobroker_ip", "")
-        val iobrokerPort = prefs.getString("iobroker_port", "8087")
+        val iobrokerPort = prefs.getString("iobroker_port", "8082")
         val matterInstance = prefs.getString("matter_instance", "0") ?: "0"
         val stickIp = prefs.getString("stick_ip", "")
         val stickPort = prefs.getString("stick_port", "8080")
@@ -239,25 +243,20 @@ class IoBrokerCompanionFragment : Fragment() {
         val (ioResult, stickResult) = withContext(Dispatchers.IO) {
             val ioJob = async {
                 if (!iobrokerIp.isNullOrBlank()) {
+                    val sock = IoBrokerSocket(iobrokerIp, iobrokerPort ?: "8082")
                     try {
-                        val url = URL("http://$iobrokerIp:$iobrokerPort/get/system.adapter.matter.$matterInstance.alive")
-                        val conn = url.openConnection() as HttpURLConnection
-                        conn.connectTimeout = 2000
-                        conn.readTimeout = 2000
-                        if (conn.responseCode == 200) {
-                            val body = conn.inputStream.bufferedReader().use { it.readText() }
-                            val alive = body.contains("\"val\":true") || body.trim() == "true"
-                            if (alive) {
-                                Pair(true, null)
-                            } else {
-                                Pair(false, "Adapter aus")
-                            }
+                        if (!sock.connect(3000)) {
+                            Pair(false, "keine Verbindung")
                         } else {
-                            Pair(false, "HTTP ${conn.responseCode}")
+                            val st = sock.getState("system.adapter.matter.$matterInstance.alive")
+                            if (st?.optBoolean("val", false) == true) Pair(true, null)
+                            else Pair(false, "Adapter aus")
                         }
                     } catch (e: Exception) {
                         Log.e("Companion", "ioBroker check failed", e)
                         Pair(false, getExceptionMessage(e))
+                    } finally {
+                        sock.close()
                     }
                 } else {
                     Pair(false, "nicht konfiguriert")
@@ -639,37 +638,10 @@ class IoBrokerCompanionFragment : Fragment() {
         activity?.runOnUiThread { if (isAdded) p.textView.text = text }
     }
 
-    // Pollt 0_userdata.0.matter_connect.pairing_result bis 'success'/'error'/Timeout (max. 2 Min).
-    // Rueckgabe: (status, message) mit status in {"success","error","timeout"}.
-    private suspend fun pollPairingResult(ip: String, port: String): Pair<String, String> {
-        val deadline = System.currentTimeMillis() + 120_000
-        while (System.currentTimeMillis() < deadline) {
-            kotlinx.coroutines.delay(1500)
-            val value = withContext(Dispatchers.IO) {
-                try {
-                    val url = URL("http://$ip:$port/get/0_userdata.0.matter_connect.pairing_result")
-                    val conn = url.openConnection() as HttpURLConnection
-                    conn.connectTimeout = 3000
-                    conn.readTimeout = 3000
-                    if (conn.responseCode == 200) {
-                        val body = conn.inputStream.bufferedReader().use { it.readText() }
-                        try { JSONObject(body).optString("val", "") } catch (e: Exception) { "" }
-                    } else ""
-                } catch (e: Exception) { "" }
-            }
-            when {
-                value == "success" -> return Pair("success", "")
-                value.startsWith("error") -> return Pair("error", value.removePrefix("error:").trim())
-                // "" oder "processing" -> weiter warten
-            }
-        }
-        return Pair("timeout", "")
-    }
-
     private fun shareDevice(nodeId: Long) {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
         val iobrokerIp = prefs.getString("iobroker_ip", "") ?: ""
-        val iobrokerPort = prefs.getString("iobroker_port", "8087") ?: "8087"
+        val iobrokerPort = prefs.getString("iobroker_port", "8082") ?: "8082"
         val matterInstance = prefs.getString("matter_instance", "0") ?: "0"
 
         if (iobrokerIp.isBlank()) {
@@ -718,19 +690,78 @@ class IoBrokerCompanionFragment : Fragment() {
                                 // Erst pruefen ob der ioBroker Matter-Adapter ueberhaupt erreichbar/alive ist.
                                 // Wenn nicht: gar nicht senden, direkt den Code zur manuellen Eingabe zeigen.
                                 updateShareProgress(progress, "Prüfe ioBroker-Matter-Verbindung…")
-                                val matterAlive = withContext(Dispatchers.IO) {
+                                val iobSock = IoBrokerSocket(iobrokerIp, iobrokerPort)
+                                val (resultStatus, resultMsg) = withContext(Dispatchers.IO) {
                                     try {
-                                        val u = URL("http://$iobrokerIp:$iobrokerPort/get/system.adapter.matter.$matterInstance.alive")
-                                        val c = u.openConnection() as HttpURLConnection
-                                        c.connectTimeout = 3000
-                                        c.readTimeout = 3000
-                                        if (c.responseCode == 200) {
-                                            val body = c.inputStream.bufferedReader().use { it.readText() }
-                                            body.contains("\"val\":true") || body.trim() == "true"
-                                        } else false
-                                    } catch (e: Exception) { false }
+                                        // 1) Verbinden + pruefen, ob der Matter-Adapter erreichbar/alive ist.
+                                        val connected = iobSock.connect()
+                                        val aliveState = if (connected) iobSock.getState("system.adapter.matter.$matterInstance.alive") else null
+                                        if (!connected || aliveState?.optBoolean("val", false) != true) {
+                                            Pair("offline", "")
+                                        } else {
+                                            // 1b) Geraet (v.a. batteriebetrieben) wachhalten, damit ioBroker
+                                            //     es waehrend des Koppelns erreichen kann.
+                                            updateShareProgress(progress, "Halte Gerät wach…")
+                                            val awakeReqMs = 120000L
+                                            val (awakeOk, awakePromisedMs) = keepDeviceAwake(devicePointer, awakeReqMs)
+                                            activity?.runOnUiThread {
+                                                if (isAdded) {
+                                                    val awakeMsg = when {
+                                                        awakeOk && awakePromisedMs != null ->
+                                                            "Gerät für ${awakePromisedMs / 1000} s wachgehalten (${awakeReqMs / 1000} s angefragt)"
+                                                        awakeOk ->
+                                                            "Gerät wachgehalten (Dauer unbekannt, ${awakeReqMs / 1000} s angefragt)"
+                                                        else ->
+                                                            "Gerät unterstützt kein Wachhalten (kein ICD) — kopple trotzdem"
+                                                    }
+                                                    Toast.makeText(requireContext(), awakeMsg, Toast.LENGTH_LONG).show()
+                                                }
+                                            }
+                                            // 2) Koppelung anstossen: kommt SOFORT mit pollingId zurueck
+                                            //    (kein langer, blockierender Aufruf -> kein falscher Timeout).
+                                            updateShareProgress(progress, "Sende Code an ioBroker…")
+                                            val startMsg = JSONObject()
+                                                .put("manualCode", manualPairingCode)
+                                                .put("pollResponse", true)
+                                            val start = iobSock.sendTo("matter.$matterInstance", "controllerCommissionDevice", startMsg)
+                                            when {
+                                                start == null -> Pair("offline", "")
+                                                start.has("error") -> Pair("error", start.optString("error"))
+                                                else -> {
+                                                    val pollingId = start.optJSONObject("result")?.opt("pollingId")
+                                                    if (pollingId == null) {
+                                                        // Adapter hat direkt (ohne pollResponse) geantwortet.
+                                                        evalCommissionResult(start)
+                                                    } else {
+                                                        // 3) Status pollen bis fertig/Fehler/Timeout (max. 2 Min).
+                                                        updateShareProgress(progress, "Angekommen ✓ — ioBroker koppelt jetzt…")
+                                                        val deadline = System.currentTimeMillis() + 120_000
+                                                        var out: Pair<String, String>? = null
+                                                        while (System.currentTimeMillis() < deadline) {
+                                                            kotlinx.coroutines.delay(1500)
+                                                            val st = iobSock.sendTo(
+                                                                "matter.$matterInstance",
+                                                                "controllerCommissionDeviceStatus",
+                                                                JSONObject().put("pollingId", pollingId)
+                                                            ) ?: continue
+                                                            if (st.optJSONObject("result")?.optString("status") == "inprogress") continue
+                                                            out = evalCommissionResult(st)
+                                                            break
+                                                        }
+                                                        out ?: Pair("timeout", "")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Pair("error", e.message ?: "Fehler")
+                                    } finally {
+                                        iobSock.close()
+                                    }
                                 }
-                                if (!matterAlive) {
+
+                                // Adapter nicht erreichbar -> Code NICHT gesendet, manueller Weg.
+                                if (resultStatus == "offline") {
                                     activity?.runOnUiThread {
                                         progress.dialog.dismiss()
                                         if (isAdded) showManualPairingDialog(
@@ -741,39 +772,6 @@ class IoBrokerCompanionFragment : Fragment() {
                                     }
                                     return@launch
                                 }
-
-                                updateShareProgress(progress, "Sende Code an ioBroker…")
-                                val sent = withContext(Dispatchers.IO) {
-                                    try {
-                                        // Matter-Instanz an ioBroker uebergeben (Script liest sie beim Koppeln aus).
-                                        runCatching {
-                                            val ci = URL("http://$iobrokerIp:$iobrokerPort/set/0_userdata.0.matter_connect.instance?value=$matterInstance").openConnection() as HttpURLConnection
-                                            ci.connectTimeout = 4000; ci.readTimeout = 4000; ci.responseCode
-                                        }
-                                        // Altes Ergebnis leeren, damit die App keinen Wert der letzten Koppelung liest.
-                                        runCatching {
-                                            val c0 = URL("http://$iobrokerIp:$iobrokerPort/set/0_userdata.0.matter_connect.pairing_result?value=").openConnection() as HttpURLConnection
-                                            c0.connectTimeout = 4000; c0.readTimeout = 4000; c0.responseCode
-                                        }
-                                        val url = URL("http://$iobrokerIp:$iobrokerPort/set/0_userdata.0.matter_connect.pairing_code?value=$manualPairingCode")
-                                        val conn = url.openConnection() as HttpURLConnection
-                                        conn.connectTimeout = 5000
-                                        conn.readTimeout = 5000
-                                        conn.responseCode == 200
-                                    } catch (e: Exception) { false }
-                                }
-
-                                if (!sent) {
-                                    // Code kam nicht an -> manueller Weg als Fallback.
-                                    activity?.runOnUiThread {
-                                        progress.dialog.dismiss()
-                                        if (isAdded) showManualPairingDialog(manualPairingCode, testSetupPinCode)
-                                    }
-                                    return@launch
-                                }
-
-                                updateShareProgress(progress, "Angekommen ✓ — ioBroker koppelt jetzt…")
-                                val (resultStatus, resultMsg) = pollPairingResult(iobrokerIp, iobrokerPort)
 
                                 activity?.runOnUiThread {
                                     progress.dialog.dismiss()
@@ -808,6 +806,61 @@ class IoBrokerCompanionFragment : Fragment() {
                 }
             }
         }
+    }
+
+    // Haelt ein ICD-/Batteriegeraet aktiv (ICD-Management-Cluster 0x0046, StayActiveRequest 0x03),
+    // damit ioBroker es waehrend des Koppelns erreichen kann.
+    // Rueckgabe: (angenommen, versprocheneDauerMs); promisedMs = null wenn Antwort nicht parsebar.
+    private suspend fun keepDeviceAwake(devicePtr: Long, requestedMs: Long): Pair<Boolean, Long?> =
+        suspendCancellableCoroutine { cont ->
+            try {
+                val tlvWriter = TlvWriter()
+                tlvWriter.startStructure(AnonymousTag)
+                tlvWriter.putUnsigned(ContextSpecificTag(0), requestedMs)   // StayActiveDuration (ms)
+                tlvWriter.endStructure()
+                // ICD Management (0x0046), StayActiveRequest (0x03), Endpoint 0 (Root Node)
+                val invokeElement = InvokeElement.newInstance(0, 0x0046L, 0x03L, tlvWriter.getEncoded(), null)
+                deviceController.invoke(
+                    object : InvokeCallback {
+                        override fun onError(ex: java.lang.Exception?) {
+                            Log.w("Companion", "StayActiveRequest fehlgeschlagen (Gerät evtl. kein ICD)", ex)
+                            if (cont.isActive) cont.resume(Pair(false, null))
+                        }
+                        override fun onResponse(response: InvokeElement?, successCode: Long) {
+                            var promised: Long? = null
+                            try {
+                                val bytes = response?.getTlvByteArray()
+                                if (bytes != null && bytes.isNotEmpty()) {
+                                    val r = TlvReader(bytes)
+                                    r.enterStructure(AnonymousTag)
+                                    promised = r.getUInt(ContextSpecificTag(0)).toLong()  // PromisedActiveDuration (ms)
+                                    r.exitContainer()
+                                }
+                            } catch (e: Exception) {
+                                Log.w("Companion", "StayActiveResponse nicht parsebar", e)
+                            }
+                            if (cont.isActive) cont.resume(Pair(true, promised))
+                        }
+                    },
+                    devicePtr,
+                    invokeElement,
+                    0,
+                    0
+                )
+            } catch (e: Exception) {
+                Log.w("Companion", "StayActiveRequest Aufbau fehlgeschlagen", e)
+                if (cont.isActive) cont.resume(Pair(false, null))
+            }
+        }
+
+    // Deutet die Antwort von controllerCommissionDevice / -Status:
+    // Erfolg = {"result":true,"nodeId":...}, Fehler = {"error":...}.
+    private fun evalCommissionResult(res: JSONObject): Pair<String, String> {
+        if (res.has("error")) return Pair("error", res.optString("error"))
+        if (res.optBoolean("result", false)) return Pair("success", "")
+        val r = res.optJSONObject("result")
+        if (r != null && !r.has("error") && r.has("nodeId")) return Pair("success", "")
+        return Pair("error", res.optString("error", res.toString()))
     }
 
     private fun showManualPairingDialog(pairingCode: String, pinCode: Long, reason: String? = null) {

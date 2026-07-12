@@ -119,6 +119,12 @@ dependencies {
     implementation "androidx.camera:camera-view:${camerax_version}"
 
     implementation 'com.google.protobuf:protobuf-java:3.22.0'
+
+    // WebSocket-Client (socket.io v2) fuer die direkte ioBroker-Anbindung ueber den web-Adapter.
+    // org.json wird ausgeschlossen, weil Android org.json bereits mitbringt (sonst Duplicate-Class-Fehler).
+    implementation('io.socket:socket.io-client:1.0.1') {
+        exclude group: 'org.json', module: 'json'
+    }
 }
 
 repositories {

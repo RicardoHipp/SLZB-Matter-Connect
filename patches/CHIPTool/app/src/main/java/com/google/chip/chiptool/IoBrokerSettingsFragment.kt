@@ -67,7 +67,7 @@ class IoBrokerSettingsFragment : Fragment() {
         stickIpEd.setText(prefs.getString("stick_ip", ""))
         stickPortEd.setText(prefs.getString("stick_port", "8080"))
         iobrokerIpEd.setText(prefs.getString("iobroker_ip", ""))
-        iobrokerPortEd.setText(prefs.getString("iobroker_port", "8087"))
+        iobrokerPortEd.setText(prefs.getString("iobroker_port", "8082"))
         matterInstanceEd.setText(prefs.getString("matter_instance", "0"))
 
         loadThreadConfig()
@@ -95,19 +95,37 @@ class IoBrokerSettingsFragment : Fragment() {
             prefs.edit().putString("iobroker_ip", ip).putString("iobroker_port", port).putString("matter_instance", matterInstance).apply()
 
             viewLifecycleOwner.lifecycleScope.launch {
-                val success = withContext(Dispatchers.IO) {
+                Toast.makeText(requireContext(), "Teste Verbindung…", Toast.LENGTH_SHORT).show()
+                // WebSocket-Test ueber den web-Adapter (socket.io v2), statt simple-api/REST.
+                val (success, detail) = withContext(Dispatchers.IO) {
+                    val sock = IoBrokerSocket(ip, port)
                     try {
-                        val url = URL("http://$ip:$port/get/system.adapter.matter.$matterInstance.alive")
-                        val conn = url.openConnection() as HttpURLConnection
-                        conn.connectTimeout = 3000
-                        conn.readTimeout = 3000
-                        conn.responseCode == 200
-                    } catch (e: Exception) { false }
+                        if (!sock.connect()) {
+                            Pair(false, "keine WebSocket-Verbindung (IP/Port/web-Adapter prüfen)")
+                        } else {
+                            val aliveState = sock.getState("system.adapter.matter.$matterInstance.alive")
+                            val isAlive = aliveState?.optBoolean("val", false) == true
+                            if (!isAlive) {
+                                // Falsche/inaktive Instanz -> sofort melden. Sonst wuerde der folgende
+                                // sendTo an eine nicht existierende Instanz bis zum Timeout haengen.
+                                Pair(false, "Matter-Adapter matter.$matterInstance nicht aktiv/vorhanden — Instanz prüfen")
+                            } else {
+                                // Adapter laeuft -> echter, nur-lesender Message-Test (kurzer Timeout).
+                                val br = sock.sendTo("matter.$matterInstance", "controllerThreadBorderRouters", JSONObject(), 8000)
+                                if (br != null && br.has("result")) Pair(true, "Matter-Adapter läuft, Message-API antwortet")
+                                else Pair(true, "Matter-Adapter läuft (Message-API ohne Antwort)")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Pair(false, e.message ?: "Fehler")
+                    } finally {
+                        sock.close()
+                    }
                 }
                 if (success) {
-                    Toast.makeText(requireContext(), "Verbindung erfolgreich! ioBroker Matter-Adapter läuft.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(requireContext(), "Verbindung erfolgreich! ($detail)", Toast.LENGTH_LONG).show()
                 } else {
-                    Toast.makeText(requireContext(), "Verbindung fehlgeschlagen! IP/Port prüfen.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(requireContext(), "Verbindung fehlgeschlagen: $detail", Toast.LENGTH_LONG).show()
                 }
             }
         }

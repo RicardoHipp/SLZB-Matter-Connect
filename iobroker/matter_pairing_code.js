@@ -1,3 +1,13 @@
+// ============================================================================
+// VERALTET / NICHT MEHR NOETIG (seit Umstellung der App auf WebSocket).
+//
+// Die SLZB-Matter-Connect-App spricht den Matter-Adapter jetzt DIREKT ueber die
+// ioBroker-WebSocket-API (web-Adapter) an:
+//     sendTo('matter.0','controllerCommissionDevice',{ manualCode, pollResponse:true })
+// Dadurch werden WEDER der Adapter "Einfache RESTful API" (simple-api) NOCH dieses
+// Skript benoetigt. Nur noch als Fallback/Doku aufbewahrt - kann geloescht werden.
+// ============================================================================
+
 // ioBroker-Skript: nimmt den Koppelungscode von der Android-App entgegen,
 // stoesst die Koppelung im Matter-Adapter an und meldet das Ergebnis zurueck.
 // States liegen konventionsgemaess unter 0_userdata.0.matter_connect.*
