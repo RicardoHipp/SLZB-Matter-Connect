@@ -130,6 +130,24 @@ class IoBrokerCompanionFragment : Fragment() {
         )
         tabDevicesLayout.adapter = deviceAdapter
 
+        // Tabs: Meine Geraete / ioBroker
+        val mainLayout = view.findViewById<View>(R.id.mainLayout)
+        val iobrokerLayout = view.findViewById<View>(R.id.iobrokerLayout)
+        val deviceTabLayout = view.findViewById<com.google.android.material.tabs.TabLayout>(R.id.deviceTabLayout)
+        deviceTabLayout.addTab(deviceTabLayout.newTab().setText("Meine Geräte"))
+        deviceTabLayout.addTab(deviceTabLayout.newTab().setText("ioBroker"))
+        deviceTabLayout.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab) {
+                val iob = tab.position == 1
+                mainLayout.visibility = if (iob) View.GONE else View.VISIBLE
+                iobrokerLayout.visibility = if (iob) View.VISIBLE else View.GONE
+                iobTabActive = iob
+                if (iob) loadIoBrokerDevices()
+            }
+            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab) {}
+            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab) {}
+        })
+
         // Theme Toggle Click
         themeToggleButton.setOnClickListener { toggleTheme() }
         helpButton.setOnClickListener { showHelpDialog() }
@@ -158,6 +176,7 @@ class IoBrokerCompanionFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
+        if (iobTabActive) loadIoBrokerDevices()
         loadSavedConfig()
         
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
@@ -456,6 +475,111 @@ class IoBrokerCompanionFragment : Fragment() {
         sheet.show(parentFragmentManager, "CommissioningSheet")
     }
 
+    private var iobAdapter: IobDeviceAdapter? = null
+    private var iobSwipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout? = null
+    private var iobTabActive = false
+
+    // Laedt die ioBroker-Geraete (Nodes inkl. Endpunkte) ueber die DM-API (dm:loadDevices).
+    private fun loadIoBrokerDevices() {
+        val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
+        val ip = prefs.getString("iobroker_ip", "") ?: ""
+        val port = prefs.getString("iobroker_port", "8082") ?: "8082"
+        val instance = prefs.getString("matter_instance", "0") ?: "0"
+        val v = view ?: return
+        val placeholder = v.findViewById<TextView>(R.id.iobrokerPlaceholderTv)
+        val recycler = v.findViewById<RecyclerView>(R.id.iobrokerDevicesRecycler)
+        if (iobSwipe == null) {
+            iobSwipe = v.findViewById(R.id.iobrokerSwipeRefresh)
+            iobSwipe?.setOnRefreshListener { loadIoBrokerDevices() }
+        }
+        if (iobAdapter == null) {
+            iobAdapter = IobDeviceAdapter()
+            recycler.layoutManager = LinearLayoutManager(requireContext())
+            recycler.adapter = iobAdapter
+        }
+        if (ip.isBlank()) {
+            iobSwipe?.isRefreshing = false
+            placeholder.text = "ioBroker ist nicht eingerichtet — siehe Einstellungen."
+            placeholder.visibility = View.VISIBLE
+            return
+        }
+        if (iobSwipe?.isRefreshing != true) {
+            placeholder.text = "Lade ioBroker-Geräte…"
+            placeholder.visibility = View.VISIBLE
+        }
+        viewLifecycleOwner.lifecycleScope.launch {
+            val nodes = withContext(Dispatchers.IO) {
+                val sock = IoBrokerSocket(ip, port)
+                try {
+                    if (!sock.connect()) return@withContext null
+                    val res = sock.dmLoadDevices("matter.$instance")
+                    val add = res?.optJSONArray("add") ?: return@withContext emptyList<IobNode>()
+
+                    fun statusOf(d: org.json.JSONObject): Pair<String, Boolean> {
+                        val st = d.optJSONObject("status")
+                        val conn = st?.optString("connection") == "connected"
+                        val extra = mutableListOf<String>()
+                        if (st != null) {
+                            if (st.has("battery")) extra.add("Akku ${st.optInt("battery")} %")
+                            if (st.has("rssi")) extra.add("Signal ${st.optInt("rssi")} dBm")
+                        }
+                        val text = (if (conn) "● verbunden" else "○ getrennt") +
+                            (if (extra.isNotEmpty()) "  ·  " + extra.joinToString("  ·  ") else "")
+                        return Pair(text, conn)
+                    }
+
+                    // 1) Endpunkte je Node sammeln
+                    val childMap = HashMap<String, MutableList<IobChild>>()
+                    for (i in 0 until add.length()) {
+                        val d = add.optJSONObject(i) ?: continue
+                        val id = d.optString("id")
+                        if (!id.contains("-")) continue
+                        val parent = id.substringBefore("-")
+                        val full = d.optString("name", id)
+                        val cname = full.substringAfter(" - ", full)
+                        val (cstatus, cconn) = statusOf(d)
+                        childMap.getOrPut(parent) { mutableListOf() }.add(IobChild(cname, cstatus, cconn))
+                    }
+                    // 2) Nodes
+                    val list = mutableListOf<IobNode>()
+                    for (i in 0 until add.length()) {
+                        val d = add.optJSONObject(i) ?: continue
+                        val id = d.optString("id")
+                        if (id.contains("-")) continue
+                        val name = d.optString("name", "Gerät $id").removePrefix("Node ")
+                        val manu = d.optString("manufacturer", "")
+                        val model = d.optString("model", "")
+                        val sub = listOf(manu, model).filter { it.isNotBlank() }.joinToString(" · ")
+                        val (statusText, connected) = statusOf(d)
+                        list.add(IobNode(id, name, sub, statusText, connected, childMap[id] ?: emptyList()))
+                    }
+                    list
+                } catch (e: Exception) {
+                    Log.e("Companion", "dm:loadDevices fehlgeschlagen", e)
+                    null
+                } finally {
+                    sock.close()
+                }
+            }
+            if (!isAdded) return@launch
+            iobSwipe?.isRefreshing = false
+            when {
+                nodes == null -> {
+                    placeholder.text = "Keine Verbindung zu ioBroker (IP/Port prüfen)."
+                    placeholder.visibility = View.VISIBLE
+                }
+                nodes.isEmpty() -> {
+                    placeholder.text = "Keine Matter-Geräte in ioBroker gefunden."
+                    placeholder.visibility = View.VISIBLE
+                }
+                else -> {
+                    iobAdapter?.update(nodes)
+                    placeholder.visibility = View.GONE
+                }
+            }
+        }
+    }
+
     fun refreshDeviceList() {
         val nodeList = DeviceIdUtil.getCommissionedNodeId(requireContext())
         val nodeIds = nodeList.mapNotNull {
@@ -708,6 +832,9 @@ class IoBrokerCompanionFragment : Fragment() {
     private fun updateShareProgress(p: ShareProgress, text: String) {
         activity?.runOnUiThread { if (isAdded) p.textView.text = text }
     }
+
+    // Von aussen (Commissioning-Sheet) aufrufbar: startet die ioBroker-Freigabe fuer ein Node.
+    fun requestShareToIoBroker(nodeId: Long) = shareDevice(nodeId)
 
     private fun shareDevice(nodeId: Long) {
         val prefs = requireActivity().getSharedPreferences("iobroker_prefs", Context.MODE_PRIVATE)
@@ -1101,8 +1228,12 @@ class DeviceAdapter(
 
         // Schalter nur bei schaltbaren Geräten (OnOff-Cluster vorhanden).
         holder.toggleSwitch.visibility = if (model?.switchable == true) View.VISIBLE else View.GONE
+        // Listener zuerst abhaengen, damit das Setzen des ECHTEN Zustands keinen Schaltbefehl ausloest.
         holder.toggleSwitch.setOnCheckedChangeListener(null)
-        holder.toggleSwitch.isChecked = false
+        val isOn = model?.readings?.firstOrNull {
+            it.clusterId == 6L && it.attributeId == 0L
+        }?.value == "An"
+        holder.toggleSwitch.isChecked = isOn
         holder.toggleSwitch.setOnCheckedChangeListener { _, isChecked ->
             onToggle(nodeId, isChecked)
         }
@@ -1180,6 +1311,94 @@ class DeviceAdapter(
         val index = devices.indexOf(nodeId)
         if (index >= 0) {
             notifyItemChanged(index)
+        }
+    }
+}
+
+
+data class IobChild(val name: String, val status: String, val connected: Boolean)
+
+data class IobNode(
+    val id: String,
+    val name: String,
+    val sub: String,
+    val status: String,
+    val connected: Boolean,
+    val children: List<IobChild>
+)
+
+class IobDeviceAdapter : RecyclerView.Adapter<IobDeviceAdapter.VH>() {
+    private var nodes: List<IobNode> = emptyList()
+    private val expanded = HashSet<String>()
+
+    private class DisplayRow(
+        val isChild: Boolean,
+        val nodeId: String,
+        val name: String,
+        val sub: String,
+        val status: String,
+        val connected: Boolean,
+        val hasChildren: Boolean
+    )
+
+    private var rows: List<DisplayRow> = emptyList()
+
+    private fun rebuild() {
+        val r = mutableListOf<DisplayRow>()
+        for (n in nodes) {
+            r.add(DisplayRow(false, n.id, n.name, n.sub, n.status, n.connected, n.children.isNotEmpty()))
+            if (expanded.contains(n.id)) {
+                for (c in n.children) r.add(DisplayRow(true, n.id, c.name, "", c.status, c.connected, false))
+            }
+        }
+        rows = r
+        notifyDataSetChanged()
+    }
+
+    fun update(list: List<IobNode>) {
+        nodes = list
+        rebuild()
+    }
+
+    class VH(v: View) : RecyclerView.ViewHolder(v) {
+        val name: TextView = v.findViewById(R.id.iobNameTv)
+        val sub: TextView = v.findViewById(R.id.iobSubTv)
+        val status: TextView = v.findViewById(R.id.iobStatusTv)
+        val chevron: TextView = v.findViewById(R.id.iobChevronTv)
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH =
+        VH(LayoutInflater.from(parent.context).inflate(R.layout.iobroker_device_item, parent, false))
+
+    override fun getItemCount(): Int = rows.size
+
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        val row = rows[position]
+        holder.name.text = row.name
+        holder.sub.text = row.sub
+        holder.sub.visibility = if (row.sub.isBlank()) View.GONE else View.VISIBLE
+        holder.status.text = row.status
+        holder.status.setTextColor(
+            androidx.core.content.ContextCompat.getColor(
+                holder.itemView.context,
+                if (row.connected) R.color.theme_accent else R.color.theme_onv
+            )
+        )
+        val lp = holder.itemView.layoutParams as ViewGroup.MarginLayoutParams
+        val density = holder.itemView.resources.displayMetrics.density
+        lp.marginStart = if (row.isChild) (28 * density).toInt() else 0
+        holder.itemView.layoutParams = lp
+        if (row.hasChildren) {
+            holder.chevron.visibility = View.VISIBLE
+            holder.chevron.text = if (expanded.contains(row.nodeId)) "▾" else "▸"
+            holder.itemView.setOnClickListener {
+                if (expanded.contains(row.nodeId)) expanded.remove(row.nodeId) else expanded.add(row.nodeId)
+                rebuild()
+            }
+        } else {
+            holder.chevron.visibility = View.GONE
+            holder.itemView.setOnClickListener(null)
+            holder.itemView.isClickable = false
         }
     }
 }

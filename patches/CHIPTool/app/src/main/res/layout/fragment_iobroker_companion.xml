@@ -124,13 +124,26 @@
         android:background="@color/theme_outline"
         app:layout_constraintTop_toBottomOf="@id/appBarLayout" />
 
+    <!-- Tabs: Meine Geraete / ioBroker -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/deviceTabLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/theme_bg"
+        app:tabTextColor="@color/theme_onv"
+        app:tabSelectedTextColor="@color/theme_accent"
+        app:tabIndicatorColor="@color/theme_accent"
+        app:tabMode="fixed"
+        app:tabGravity="fill"
+        app:layout_constraintTop_toBottomOf="@id/appBarDivider" />
+
     <!-- Unified Devices & Commissioning Layout -->
     <LinearLayout
         android:id="@+id/mainLayout"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:orientation="vertical"
-        app:layout_constraintTop_toBottomOf="@id/appBarDivider"
+        app:layout_constraintTop_toBottomOf="@id/deviceTabLayout"
         app:layout_constraintBottom_toBottomOf="parent">
 
         <!-- Commissioning Button directly above list -->
@@ -165,4 +178,41 @@
             android:clipToPadding="false"
             tools:listitem="@layout/device_item"/>
     </LinearLayout>
+    <!-- ioBroker-Geraete (zweiter Tab) -->
+    <LinearLayout
+        android:id="@+id/iobrokerLayout"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:orientation="vertical"
+        android:visibility="gone"
+        app:layout_constraintTop_toBottomOf="@id/deviceTabLayout"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <TextView
+            android:id="@+id/iobrokerPlaceholderTv"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="24dp"
+            android:gravity="center"
+            android:text="ioBroker-Geraete erscheinen hier.\n(Datenanbindung folgt als Naechstes.)"
+            android:textColor="@color/theme_onv"
+            android:textSize="13sp" />
+
+        <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+            android:id="@+id/iobrokerSwipeRefresh"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/iobrokerDevicesRecycler"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:paddingLeft="16dp"
+                android:paddingRight="16dp"
+                android:paddingBottom="16dp"
+                android:clipToPadding="false" />
+        </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+    </LinearLayout>
+
 </androidx.constraintlayout.widget.ConstraintLayout>

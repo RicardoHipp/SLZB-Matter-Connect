@@ -92,6 +92,79 @@ class IoBrokerSocket(private val ip: String, private val port: String) {
         }
     }
 
+    /** DM-API: laedt die KOMPLETTE Geraeteliste (Pagination via dm:deviceLoadProgress). */
+    suspend fun dmLoadDevices(instance: String, timeoutMs: Long = 20000): JSONObject? {
+        if (socket == null) return null
+        return withTimeoutOrNull(timeoutMs) {
+            val merged = org.json.JSONArray()
+            var total = -1
+            var res = dmCall(instance, "dm:loadDevices", null) ?: return@withTimeoutOrNull null
+            var guard = 0
+            while (guard < 50) {
+                val add = res.optJSONArray("add")
+                if (add != null) {
+                    for (i in 0 until add.length()) merged.put(add.get(i))
+                }
+                if (total < 0) total = res.optInt("total", -1)
+                val origin = res.optJSONObject("next")?.opt("origin") ?: break
+                res = dmCall(instance, "dm:deviceLoadProgress", org.json.JSONObject().put("origin", origin)) ?: break
+                guard++
+            }
+            org.json.JSONObject().put("add", merged).put("total", total)
+        }
+    }
+
+    /** Ein einzelner sendTo-Aufruf; gibt das Ergebnis-JSON zurueck. */
+    private suspend fun dmCall(instance: String, command: String, message: Any?): JSONObject? {
+        val s = socket ?: return null
+        return suspendCancellableCoroutine { cont ->
+            s.emit("sendTo", instance, command, message, Ack { args ->
+                val r = args?.getOrNull(0)
+                if (cont.isActive) cont.resume(r as? JSONObject)
+            })
+        }
+    }
+
+    /** Liest alle States unter dem Muster (id -> stateObj). */
+    suspend fun getStates(pattern: String, timeoutMs: Long = 8000): JSONObject? {
+        val s = socket ?: return null
+        return withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<JSONObject?> { cont ->
+                s.emit("getStates", pattern, Ack { args ->
+                    val states = args?.getOrNull(1)
+                    if (cont.isActive) cont.resume(states as? JSONObject)
+                })
+            }
+        }
+    }
+
+    /** Liest State-Objekte im id-Bereich (Metadaten). Rueckgabe: {rows:[{id, value:{common...}}]}. */
+    suspend fun getStateObjects(startkey: String, endkey: String, timeoutMs: Long = 8000): JSONObject? {
+        val s = socket ?: return null
+        val params = JSONObject().put("startkey", startkey).put("endkey", endkey)
+        return withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<JSONObject?> { cont ->
+                s.emit("getObjectView", "system", "state", params, Ack { args ->
+                    val doc = args?.getOrNull(1)
+                    if (cont.isActive) cont.resume(doc as? JSONObject)
+                })
+            }
+        }
+    }
+
+    /** Setzt einen State (Steuerung). true bei Erfolg. */
+    suspend fun setState(id: String, value: Any?, timeoutMs: Long = 6000): Boolean {
+        val s = socket ?: return false
+        return withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<Boolean> { cont ->
+                s.emit("setState", id, value, Ack { args ->
+                    val err = args?.getOrNull(0)
+                    if (cont.isActive) cont.resume(err == null)
+                })
+            }
+        } ?: false
+    }
+
     /** Verbindung sauber schliessen. Immer im finally aufrufen. */
     fun close() {
         socket?.let {

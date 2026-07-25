@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import chip.devicecontroller.AttestationInfo
@@ -516,6 +517,24 @@ class CommissioningSheetFragment : BottomSheetDialogFragment() {
                     navHost.refreshDeviceList()
                 }
                 dismiss()
+            }
+
+            // Wenn ioBroker eingerichtet ist: direkt fragen, ob das Geraet auch mit ioBroker verbunden werden soll.
+            val iobConfigured = !devicePrefs.getString("iobroker_ip", "").isNullOrBlank()
+            if (iobConfigured && isAdded) {
+                AlertDialog.Builder(requireContext())
+                    .setTitle("Mit ioBroker verbinden?")
+                    .setMessage("Das Gerät ist jetzt am Handy angelernt. Soll es gleich auch mit ioBroker verbunden werden?")
+                    .setPositiveButton("Ja, verbinden") { _, _ ->
+                        val navHost = parentFragmentManager.findFragmentByTag("IoBrokerCompanionFragment")
+                        dismiss()
+                        if (navHost is IoBrokerCompanionFragment) {
+                            navHost.refreshDeviceList()
+                            navHost.requestShareToIoBroker(nodeId)
+                        }
+                    }
+                    .setNegativeButton("Später", null)
+                    .show()
             }
         }
     }
